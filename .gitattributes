@@ -89,3 +89,7 @@ dataset_infos.json ignore
 *.tsv filter=lfs diff=lfs merge=lfs -text
 
 train.rar filter=lfs diff=lfs merge=lfs -text
+
+eval.rar filter=lfs diff=lfs merge=lfs -text
+submit_sample.csv filter=lfs diff=lfs merge=lfs -text
+dev.rar filter=lfs diff=lfs merge=lfs -text
