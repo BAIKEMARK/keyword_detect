@@ -96,3 +96,5 @@ dev.rar filter=lfs diff=lfs merge=lfs -text
 
 evalcsv_without_label/eval_seen_without_label.csv filter=lfs diff=lfs merge=lfs -text
 evalcsv_without_label/eval_unseen_without_label.csv filter=lfs diff=lfs merge=lfs -text
+
+*.rar filter=lfs diff=lfs merge=lfs -text
