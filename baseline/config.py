@@ -45,8 +45,8 @@ class Paths:
 
     def __post_init__(self):
         r = self.root
-        self.train_zip = os.path.join(r, "train", "wav.zip")
-        self.train_csv = os.path.join(r, "train", "train_label.csv")
+        self.train_zip = os.path.join(r, "train_subset", "wav.zip")
+        self.train_csv = os.path.join(r, "train_subset", "train_label.csv")
         self.dev_seen_zip = os.path.join(r, "dev", "dev_seen", "wav.zip")
         self.dev_seen_csv = os.path.join(r, "dev", "dev_seen", "dev_seen_label.csv")
         self.dev_unseen_zip = os.path.join(r, "dev", "dev_unseen", "wav.zip")
