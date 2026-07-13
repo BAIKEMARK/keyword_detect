@@ -1,0 +1,9 @@
+.venv/
+
+train_subset/
+dev/
+eval/
+
+baseline/checkpoints/
+baseline/submission.csv
+submission.csv

@@ -15,6 +15,7 @@ from torch.utils.data import DataLoader
 from config import AUDIO, PATHS, TRAIN
 from data import PairDataset, collate, load_pairs
 from model import SiameseKWS
+from runtime import select_device, should_pin_memory
 
 
 def parse_args():
@@ -22,7 +23,10 @@ def parse_args():
     ap.add_argument("--ckpt", default=os.path.join(PATHS.ckpt_dir, "best.pt"))
     ap.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "submission.csv"))
     ap.add_argument("--bs", type=int, default=256)
-    ap.add_argument("--workers", type=int, default=TRAIN.num_workers)
+    ap.add_argument("--workers", type=int, default=None,
+                    help="DataLoader workers. Default: 8 on CUDA, 0 otherwise")
+    ap.add_argument("--device", type=str, default="auto",
+                    help="auto, cuda, mps, or cpu")
     return ap.parse_args()
 
 
@@ -30,7 +34,8 @@ def parse_args():
 def predict(model, zip_path, csv_path, prefix, device, args):
     ds = PairDataset(load_pairs(csv_path, False), zip_path, AUDIO, inference=True)
     loader = DataLoader(ds, batch_size=args.bs, shuffle=False,
-                        num_workers=args.workers, collate_fn=collate)
+                        num_workers=args.workers, collate_fn=collate,
+                        pin_memory=should_pin_memory(device))
     rows = []
     for e, q, _, ids in loader:
         e, q = e.to(device), q.to(device)
@@ -42,7 +47,11 @@ def predict(model, zip_path, csv_path, prefix, device, args):
 
 def main():
     args = parse_args()
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = select_device(args.device)
+    print(f"device: {device}")
+    if args.workers is None:
+        args.workers = TRAIN.num_workers if device.type == "cuda" else 0
+    print(f"workers: {args.workers}")
     ckpt = torch.load(args.ckpt, map_location=device, weights_only=False)
     model = SiameseKWS(AUDIO.n_mels, ckpt.get("embed_dim", TRAIN.embed_dim)).to(device)
     model.load_state_dict(ckpt["model"])

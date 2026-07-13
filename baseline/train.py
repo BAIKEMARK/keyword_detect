@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader, Subset
 from config import AUDIO, PATHS, TRAIN
 from data import PairDataset, collate, load_pairs
 from model import SiameseKWS
+from runtime import select_device, should_pin_memory
 
 
 def parse_args():
@@ -21,8 +22,11 @@ def parse_args():
     ap.add_argument("--lr", type=float, default=TRAIN.lr)
     ap.add_argument("--subset", type=int, default=TRAIN.train_subset,
                     help="训练子集大小，越小分数通常越低")
-    ap.add_argument("--workers", type=int, default=TRAIN.num_workers)
+    ap.add_argument("--workers", type=int, default=None,
+                    help="DataLoader workers. Default: 8 on CUDA, 0 otherwise")
     ap.add_argument("--out", type=str, default=os.path.join(PATHS.ckpt_dir, "best.pt"))
+    ap.add_argument("--device", type=str, default="auto",
+                    help="auto, cuda, mps, or cpu")
     return ap.parse_args()
 
 
@@ -42,31 +46,37 @@ def main():
     args = parse_args()
     torch.manual_seed(TRAIN.seed)
     np.random.seed(TRAIN.seed)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = select_device(args.device)
+    print(f"device: {device}", flush=True)
+    if args.workers is None:
+        args.workers = TRAIN.num_workers if device.type == "cuda" else 0
+    print(f"workers: {args.workers}", flush=True)
     os.makedirs(PATHS.ckpt_dir, exist_ok=True)
 
     all_pairs = load_pairs(PATHS.train_csv, with_label=True)
     n = min(args.subset, len(all_pairs))
     idx = np.random.default_rng(TRAIN.seed).permutation(len(all_pairs))[:n]
     train_pairs = [all_pairs[i] for i in idx]
-    print(f"train: {n} / {len(all_pairs)} pairs")
+    print(f"train: {n} / {len(all_pairs)} pairs", flush=True)
 
     train_ds = PairDataset(train_pairs, PATHS.train_zip, AUDIO)
     train_loader = DataLoader(train_ds, batch_size=args.bs, shuffle=True,
                               num_workers=args.workers, collate_fn=collate,
-                              pin_memory=True, drop_last=True)
+                              pin_memory=should_pin_memory(device),
+                              drop_last=True)
 
     def dev_loader(zip_p, csv_p):
         ds = PairDataset(load_pairs(csv_p, True), zip_p, AUDIO)
         return DataLoader(ds, batch_size=args.bs, shuffle=False,
-                          num_workers=args.workers, collate_fn=collate)
+                          num_workers=args.workers, collate_fn=collate,
+                          pin_memory=should_pin_memory(device))
 
     dev_seen = dev_loader(PATHS.dev_seen_zip, PATHS.dev_seen_csv)
     dev_unseen = dev_loader(PATHS.dev_unseen_zip, PATHS.dev_unseen_csv)
 
     model = SiameseKWS(AUDIO.n_mels, TRAIN.embed_dim).to(device)
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"model params: {n_params:,} ({n_params/1e6:.2f}M)")
+    print(f"model params: {n_params:,} ({n_params/1e6:.2f}M)", flush=True)
 
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     crit = torch.nn.BCEWithLogitsLoss(
@@ -85,22 +95,23 @@ def main():
             opt.step()
             loss_sum += loss.item()
             if it % TRAIN.log_every == 0:
-                print(f"  ep{ep} {it}/{len(train_loader)} loss={loss_sum/it:.4f}")
+                print(f"  ep{ep} {it}/{len(train_loader)} loss={loss_sum/it:.4f}",
+                      flush=True)
 
         auc_s = evaluate(model, dev_seen, device)
         auc_u = evaluate(model, dev_unseen, device)
         mean = (auc_s + auc_u) / 2
         print(f"[epoch {ep}] seen={auc_s:.4f} unseen={auc_u:.4f} "
-              f"mean={mean:.4f} ({time.time()-t0:.0f}s)")
+              f"mean={mean:.4f} ({time.time()-t0:.0f}s)", flush=True)
 
         if mean > best:
             best = mean
             torch.save({"model": model.state_dict(),
                         "embed_dim": TRAIN.embed_dim,
                         "auc": mean}, args.out)
-            print(f"  saved -> {args.out}")
+            print(f"  saved -> {args.out}", flush=True)
 
-    print(f"done. best dev mean AUC = {best:.4f}")
+    print(f"done. best dev mean AUC = {best:.4f}", flush=True)
 
 
 if __name__ == "__main__":
