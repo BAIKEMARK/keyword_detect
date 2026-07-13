@@ -32,7 +32,11 @@ class Encoder(nn.Module):
         emb = self.fc(h)
         return F.normalize(emb, dim=-1)
 
-    def forward_frames(self, x):
+    def forward_frames(self, x, lengths=None):
+        if lengths is not None:
+            steps = torch.arange(x.shape[-1], device=x.device)
+            valid = steps.unsqueeze(0) < lengths.unsqueeze(1)
+            x = x.masked_fill(~valid[:, None, None, :], 0.0)
         h = self.cnn(x).mean(dim=2).transpose(1, 2)
         emb = self.fc(h)
         return F.normalize(emb, dim=-1)
@@ -48,7 +52,7 @@ class SiameseKWS(nn.Module):
         self.scale = nn.Parameter(torch.tensor(8.0))
         self.bias = nn.Parameter(torch.tensor(0.0))
 
-    def forward(self, enroll, query):
+    def forward(self, enroll, query, enroll_lengths=None, query_lengths=None):
         e = self.encoder.forward_global(enroll)
         q = self.encoder.forward_global(query)
         sim = (e * q).sum(dim=-1)       # 余弦相似度（已 L2 归一化）
@@ -62,12 +66,42 @@ class FrameMaxMeanKWS(nn.Module):
         self.scale = nn.Parameter(torch.tensor(8.0))
         self.bias = nn.Parameter(torch.tensor(0.0))
 
-    def forward(self, enroll, query):
-        e = self.encoder.forward_frames(enroll)
-        q = self.encoder.forward_frames(query)
+    @staticmethod
+    def _pooled_lengths(lengths, batch_size, output_frames, device):
+        if lengths is None:
+            return torch.full(
+                (batch_size,), output_frames, dtype=torch.long, device=device)
+        lengths = lengths.to(device=device)
+        lengths = torch.div(lengths, 2, rounding_mode="floor")
+        lengths = torch.div(lengths, 2, rounding_mode="floor")
+        return lengths.clamp(min=1, max=output_frames)
+
+    @staticmethod
+    def _mask(lengths, frames):
+        steps = torch.arange(frames, device=lengths.device)
+        return steps.unsqueeze(0) < lengths.unsqueeze(1)
+
+    @staticmethod
+    def _masked_mean(values, mask):
+        values = values.masked_fill(~mask, 0.0)
+        return values.sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+
+    def forward(self, enroll, query, enroll_lengths=None, query_lengths=None):
+        e = self.encoder.forward_frames(enroll, enroll_lengths)
+        q = self.encoder.forward_frames(query, query_lengths)
+        e_lengths = self._pooled_lengths(
+            enroll_lengths, enroll.shape[0], e.shape[1], e.device)
+        q_lengths = self._pooled_lengths(
+            query_lengths, query.shape[0], q.shape[1], q.device)
+        e_mask = self._mask(e_lengths, e.shape[1])
+        q_mask = self._mask(q_lengths, q.shape[1])
+
         sim = torch.bmm(e, q.transpose(1, 2))
-        score_e = sim.max(dim=2).values.mean(dim=1)
-        score_q = sim.max(dim=1).values.mean(dim=1)
+        fill = torch.finfo(sim.dtype).min
+        best_e = sim.masked_fill(~q_mask[:, None, :], fill).max(dim=2).values
+        best_q = sim.masked_fill(~e_mask[:, :, None], fill).max(dim=1).values
+        score_e = self._masked_mean(best_e, e_mask)
+        score_q = self._masked_mean(best_q, q_mask)
         score = 0.5 * (score_e + score_q)
         return self.scale * score + self.bias
 

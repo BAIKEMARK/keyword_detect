@@ -134,14 +134,15 @@ class LogMel:
         return torch.log(self.mel(wav) + 1e-6)
 
 
-def pad_spec(spec: torch.Tensor, max_frames: int) -> torch.Tensor:
+def pad_spec(spec: torch.Tensor, max_frames: int) -> tuple[torch.Tensor, int]:
     """(n_mels, T) -> (1, n_mels, max_frames)"""
     T = spec.shape[-1]
+    valid_frames = min(T, max_frames)
     if T < max_frames:
         spec = torch.nn.functional.pad(spec, (0, max_frames - T))
     else:
         spec = spec[:, :max_frames]
-    return spec.unsqueeze(0)
+    return spec.unsqueeze(0), valid_frames
 
 
 class PairDataset(Dataset):
@@ -158,7 +159,7 @@ class PairDataset(Dataset):
     def __len__(self):
         return len(self.pairs)
 
-    def _feat(self, wav_name: str) -> torch.Tensor:
+    def _feat(self, wav_name: str) -> tuple[torch.Tensor, int]:
         wav = read_wav(self.zip_path, wav_name, self.cfg.sample_rate)
         if self.augment is not None:
             wav = self.augment(wav)
@@ -168,10 +169,10 @@ class PairDataset(Dataset):
     def __getitem__(self, idx: int):
         p = self.pairs[idx]
         pid = p["id"]
-        e = self._feat(f"wav/{pid}_enroll.wav")
-        q = self._feat(f"wav/{pid}_query.wav")
+        e, e_len = self._feat(f"wav/{pid}_enroll.wav")
+        q, q_len = self._feat(f"wav/{pid}_query.wav")
         label = -1 if self.inference else p["label"]
-        return e, q, label, pid
+        return e, q, label, pid, e_len, q_len
 
 
 def collate(batch):
@@ -179,4 +180,6 @@ def collate(batch):
     qs = torch.stack([b[1] for b in batch])
     labels = torch.tensor([b[2] for b in batch], dtype=torch.float32)
     ids = [b[3] for b in batch]
-    return es, qs, labels, ids
+    e_lens = torch.tensor([b[4] for b in batch], dtype=torch.long)
+    q_lens = torch.tensor([b[5] for b in batch], dtype=torch.long)
+    return es, qs, labels, ids, e_lens, q_lens

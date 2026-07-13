@@ -39,9 +39,10 @@ def predict(model, zip_path, csv_path, prefix, device, args):
                         num_workers=args.workers, collate_fn=collate,
                         pin_memory=should_pin_memory(device))
     rows = []
-    for e, q, _, ids in loader:
+    for e, q, _, ids, e_lens, q_lens in loader:
         e, q = e.to(device), q.to(device)
-        prob = torch.sigmoid(model(e, q)).cpu().numpy()
+        e_lens, q_lens = e_lens.to(device), q_lens.to(device)
+        prob = torch.sigmoid(model(e, q, e_lens, q_lens)).cpu().numpy()
         for pid, p in zip(ids, prob):
             rows.append((f"{prefix}_{pid}", float(p)))
     return rows

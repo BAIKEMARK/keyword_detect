@@ -42,9 +42,10 @@ def parse_args():
 def evaluate(model, loader, device):
     model.eval()
     probs, labels = [], []
-    for e, q, y, _ in loader:
+    for e, q, y, _, e_lens, q_lens in loader:
         e, q = e.to(device), q.to(device)
-        logit = model(e, q)
+        e_lens, q_lens = e_lens.to(device), q_lens.to(device)
+        logit = model(e, q, e_lens, q_lens)
         probs.append(torch.sigmoid(logit).cpu().numpy())
         labels.append(y.numpy())
     return roc_auc_score(np.concatenate(labels), np.concatenate(probs))
@@ -112,10 +113,11 @@ def main():
         model.train()
         t0 = time.time()
         loss_sum = 0.0
-        for it, (e, q, y, _) in enumerate(train_loader, 1):
+        for it, (e, q, y, _, e_lens, q_lens) in enumerate(train_loader, 1):
             e, q, y = e.to(device), q.to(device), y.to(device)
+            e_lens, q_lens = e_lens.to(device), q_lens.to(device)
             opt.zero_grad()
-            loss = crit(model(e, q), y)
+            loss = crit(model(e, q, e_lens, q_lens), y)
             loss.backward()
             opt.step()
             loss_sum += loss.item()
@@ -139,6 +141,7 @@ def main():
                         "noise_snr_min": args.noise_snr_min,
                         "noise_snr_max": args.noise_snr_max,
                         "noise_dir": args.noise_dir,
+                        "padding_mask": True,
                         "auc": mean}, args.out)
             print(f"  saved -> {args.out}", flush=True)
 
