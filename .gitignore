@@ -4,6 +4,7 @@
 train_subset/
 dev/
 eval/
+noise/
 
 baseline/checkpoints/
 baseline/submission.csv
