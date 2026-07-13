@@ -20,12 +20,17 @@ class TrainConfig:
     embed_dim: int = 64
     batch_size: int = 128
     num_workers: int = 8
-    epochs: int = 10
+    epochs: int = 15
     lr: float = 1e-3
     pos_weight: float = 4.0   # 训练集正负比约 1:4
     train_subset: int = 500000  
     seed: int = 42
     log_every: int = 100
+    model: str = "frame_maxmean"
+    noise_prob: float = 0.5
+    noise_snr_min: float = -10.0
+    noise_snr_max: float = 5.0
+    noise_dir: str = ""
 
 
 @dataclass

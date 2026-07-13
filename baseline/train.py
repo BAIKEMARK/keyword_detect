@@ -7,11 +7,11 @@ import time
 import numpy as np
 import torch
 from sklearn.metrics import roc_auc_score
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader
 
 from config import AUDIO, PATHS, TRAIN
-from data import PairDataset, collate, load_pairs
-from model import SiameseKWS
+from data import NoiseAugmenter, PairDataset, collate, load_pairs
+from model import build_model
 from runtime import select_device, should_pin_memory
 
 
@@ -20,6 +20,9 @@ def parse_args():
     ap.add_argument("--epochs", type=int, default=TRAIN.epochs)
     ap.add_argument("--bs", type=int, default=TRAIN.batch_size)
     ap.add_argument("--lr", type=float, default=TRAIN.lr)
+    ap.add_argument("--pos-weight", type=float, default=TRAIN.pos_weight)
+    ap.add_argument("--model", choices=["global", "frame_maxmean"],
+                    default=TRAIN.model)
     ap.add_argument("--subset", type=int, default=TRAIN.train_subset,
                     help="训练子集大小，越小分数通常越低")
     ap.add_argument("--workers", type=int, default=None,
@@ -27,6 +30,11 @@ def parse_args():
     ap.add_argument("--out", type=str, default=os.path.join(PATHS.ckpt_dir, "best.pt"))
     ap.add_argument("--device", type=str, default="auto",
                     help="auto, cuda, mps, or cpu")
+    ap.add_argument("--noise-prob", type=float, default=TRAIN.noise_prob)
+    ap.add_argument("--noise-snr-min", type=float, default=TRAIN.noise_snr_min)
+    ap.add_argument("--noise-snr-max", type=float, default=TRAIN.noise_snr_max)
+    ap.add_argument("--noise-dir", type=str, default=TRAIN.noise_dir,
+                    help="Optional real-noise wav/flac/ogg directory")
     return ap.parse_args()
 
 
@@ -51,6 +59,11 @@ def main():
     if args.workers is None:
         args.workers = TRAIN.num_workers if device.type == "cuda" else 0
     print(f"workers: {args.workers}", flush=True)
+    print(f"model: {args.model}", flush=True)
+    print(f"pos_weight: {args.pos_weight}", flush=True)
+    print(f"noise: prob={args.noise_prob} snr=[{args.noise_snr_min}, "
+          f"{args.noise_snr_max}] dir={args.noise_dir or 'gaussian'}",
+          flush=True)
     os.makedirs(PATHS.ckpt_dir, exist_ok=True)
 
     all_pairs = load_pairs(PATHS.train_csv, with_label=True)
@@ -59,7 +72,19 @@ def main():
     train_pairs = [all_pairs[i] for i in idx]
     print(f"train: {n} / {len(all_pairs)} pairs", flush=True)
 
-    train_ds = PairDataset(train_pairs, PATHS.train_zip, AUDIO)
+    augment = None
+    if args.noise_prob > 0:
+        augment = NoiseAugmenter(
+            AUDIO.sample_rate,
+            args.noise_prob,
+            args.noise_snr_min,
+            args.noise_snr_max,
+            args.noise_dir,
+            TRAIN.seed,
+        )
+        print(f"real noise files: {len(augment.noise_paths)}", flush=True)
+
+    train_ds = PairDataset(train_pairs, PATHS.train_zip, AUDIO, augment=augment)
     train_loader = DataLoader(train_ds, batch_size=args.bs, shuffle=True,
                               num_workers=args.workers, collate_fn=collate,
                               pin_memory=should_pin_memory(device),
@@ -74,13 +99,13 @@ def main():
     dev_seen = dev_loader(PATHS.dev_seen_zip, PATHS.dev_seen_csv)
     dev_unseen = dev_loader(PATHS.dev_unseen_zip, PATHS.dev_unseen_csv)
 
-    model = SiameseKWS(AUDIO.n_mels, TRAIN.embed_dim).to(device)
+    model = build_model(args.model, AUDIO.n_mels, TRAIN.embed_dim).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"model params: {n_params:,} ({n_params/1e6:.2f}M)", flush=True)
 
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     crit = torch.nn.BCEWithLogitsLoss(
-        pos_weight=torch.tensor(TRAIN.pos_weight, device=device))
+        pos_weight=torch.tensor(args.pos_weight, device=device))
 
     best = -1.0
     for ep in range(1, args.epochs + 1):
@@ -108,6 +133,12 @@ def main():
             best = mean
             torch.save({"model": model.state_dict(),
                         "embed_dim": TRAIN.embed_dim,
+                        "model_name": args.model,
+                        "pos_weight": args.pos_weight,
+                        "noise_prob": args.noise_prob,
+                        "noise_snr_min": args.noise_snr_min,
+                        "noise_snr_max": args.noise_snr_max,
+                        "noise_dir": args.noise_dir,
                         "auc": mean}, args.out)
             print(f"  saved -> {args.out}", flush=True)
 

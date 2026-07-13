@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 
 from config import AUDIO, PATHS, TRAIN
 from data import PairDataset, collate, load_pairs
-from model import SiameseKWS
+from model import build_model
 from runtime import select_device, should_pin_memory
 
 
@@ -27,6 +27,8 @@ def parse_args():
                     help="DataLoader workers. Default: 8 on CUDA, 0 otherwise")
     ap.add_argument("--device", type=str, default="auto",
                     help="auto, cuda, mps, or cpu")
+    ap.add_argument("--model", choices=["global", "frame_maxmean"], default=None,
+                    help="Override checkpoint model type")
     return ap.parse_args()
 
 
@@ -53,7 +55,13 @@ def main():
         args.workers = TRAIN.num_workers if device.type == "cuda" else 0
     print(f"workers: {args.workers}")
     ckpt = torch.load(args.ckpt, map_location=device, weights_only=False)
-    model = SiameseKWS(AUDIO.n_mels, ckpt.get("embed_dim", TRAIN.embed_dim)).to(device)
+    model_name = args.model or ckpt.get("model_name", "global")
+    print(f"model: {model_name}")
+    model = build_model(
+        model_name,
+        AUDIO.n_mels,
+        ckpt.get("embed_dim", TRAIN.embed_dim),
+    ).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
     print(f"loaded {args.ckpt} (dev mean AUC={ckpt.get('auc')})")
