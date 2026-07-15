@@ -37,10 +37,15 @@ def read_wav(zip_path: str, name: str, sr: int) -> np.ndarray:
     return wav.astype(np.float32)
 
 
-def read_audio_file(path: str, sr: int) -> np.ndarray:
-    wav, file_sr = sf.read(path, dtype="float32", always_2d=False)
-    if wav.ndim > 1:
-        wav = wav.mean(axis=1)
+def read_audio_segment(path: str, sr: int, num_samples: int,
+                       rng: np.random.Generator) -> np.ndarray:
+    with sf.SoundFile(path) as audio:
+        file_sr = audio.samplerate
+        requested = max(1, int(np.ceil(num_samples * file_sr / sr)))
+        if len(audio) > requested:
+            audio.seek(int(rng.integers(0, len(audio) - requested + 1)))
+        wav = audio.read(requested, dtype="float32", always_2d=True)
+    wav = wav.mean(axis=1)
     if file_sr != sr:
         t = torchaudio.functional.resample(
             torch.from_numpy(wav).unsqueeze(0), file_sr, sr)
@@ -112,7 +117,8 @@ class NoiseAugmenter:
 
         if self.noise_paths:
             noise_path = self.noise_paths[int(rng.integers(0, len(self.noise_paths)))]
-            noise = read_audio_file(noise_path, self.sample_rate)
+            noise = read_audio_segment(
+                noise_path, self.sample_rate, len(wav), rng)
         else:
             noise = rng.standard_normal(len(wav)).astype(np.float32)
 
@@ -145,6 +151,20 @@ def pad_spec(spec: torch.Tensor, max_frames: int) -> tuple[torch.Tensor, int]:
     return spec.unsqueeze(0), valid_frames
 
 
+def truncate_waveform(wav: np.ndarray, max_samples: int) -> torch.Tensor:
+    if max_samples <= 0:
+        raise ValueError("max_samples must be positive")
+    wav = wav[:max_samples]
+    if len(wav) == 0:
+        raise ValueError("empty audio is not supported")
+    return torch.from_numpy(wav.copy())
+
+
+def normalize_waveform(wav: torch.Tensor) -> torch.Tensor:
+    variance = wav.var(unbiased=False)
+    return (wav - wav.mean()) / torch.sqrt(variance + 1e-7)
+
+
 class PairDataset(Dataset):
     def __init__(self, pairs: List[dict], zip_path: str, cfg: AudioConfig,
                  inference: bool = False,
@@ -175,6 +195,35 @@ class PairDataset(Dataset):
         return e, q, label, pid, e_len, q_len
 
 
+class WavePairDataset(Dataset):
+    def __init__(self, pairs: List[dict], zip_path: str, cfg: AudioConfig,
+                 max_samples: int, inference: bool = False,
+                 query_augment: Optional[NoiseAugmenter] = None):
+        self.pairs = pairs
+        self.zip_path = zip_path
+        self.cfg = cfg
+        self.max_samples = max_samples
+        self.inference = inference
+        self.query_augment = query_augment
+
+    def __len__(self):
+        return len(self.pairs)
+
+    def _wav(self, wav_name: str, augment: bool) -> torch.Tensor:
+        wav = read_wav(self.zip_path, wav_name, self.cfg.sample_rate)
+        if augment and self.query_augment is not None:
+            wav = self.query_augment(wav)
+        return normalize_waveform(truncate_waveform(wav, self.max_samples))
+
+    def __getitem__(self, idx: int):
+        p = self.pairs[idx]
+        pid = p["id"]
+        enroll = self._wav(f"wav/{pid}_enroll.wav", augment=False)
+        query = self._wav(f"wav/{pid}_query.wav", augment=True)
+        label = -1 if self.inference else p["label"]
+        return enroll, query, label, pid, len(enroll), len(query)
+
+
 def collate(batch):
     es = torch.stack([b[0] for b in batch])
     qs = torch.stack([b[1] for b in batch])
@@ -183,3 +232,21 @@ def collate(batch):
     e_lens = torch.tensor([b[4] for b in batch], dtype=torch.long)
     q_lens = torch.tensor([b[5] for b in batch], dtype=torch.long)
     return es, qs, labels, ids, e_lens, q_lens
+
+
+def collate_wave_pairs(batch):
+    e_lens = torch.tensor([b[4] for b in batch], dtype=torch.long)
+    q_lens = torch.tensor([b[5] for b in batch], dtype=torch.long)
+    max_len = int(torch.cat([e_lens, q_lens]).max())
+
+    def pad(waveforms):
+        output = torch.zeros(len(waveforms), max_len, dtype=torch.float32)
+        for i, wav in enumerate(waveforms):
+            output[i, :len(wav)] = wav
+        return output
+
+    enroll = pad([b[0] for b in batch])
+    query = pad([b[1] for b in batch])
+    labels = torch.tensor([b[2] for b in batch], dtype=torch.float32)
+    ids = [b[3] for b in batch]
+    return enroll, query, labels, ids, e_lens, q_lens

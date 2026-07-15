@@ -66,3 +66,47 @@ bash scripts/download_demand_16k.sh
 ```
 
 DEMAND 来源：<https://zenodo.org/records/1227121>
+
+## 冻结 WavLM Base+
+
+WavLM 只作为冻结特征提取器，最终 posterior 由训练得到的层加权、投影和
+对称帧级匹配头输出。首次运行会下载 `microsoft/wavlm-base-plus`。
+
+```bash
+python3 -m pip install "transformers>=4.40,<5"
+```
+
+先在服务器做一轮小规模 smoke test：
+
+```bash
+python baseline/train_wavlm.py \
+  --subset 256 \
+  --epochs 1 \
+  --bs 8 \
+  --device cuda \
+  --noise-dir noise/DEMAND_16k/wav \
+  --out baseline/checkpoints/wavlm_smoke.pt
+```
+
+确认日志显示 `real noise files: 144`，并完成 seen/unseen 评估后，运行 50K
+首轮实验：
+
+```bash
+python baseline/train_wavlm.py \
+  --subset 50000 \
+  --epochs 3 \
+  --bs 16 \
+  --workers 8 \
+  --device cuda \
+  --noise-dir noise/DEMAND_16k/wav \
+  --out baseline/checkpoints/wavlm_base_plus_50k.pt
+```
+
+生成提交文件：
+
+```bash
+python baseline/infer_wavlm.py \
+  --ckpt baseline/checkpoints/wavlm_base_plus_50k.pt \
+  --device cuda \
+  --out submission_wavlm_base_plus_50k.csv
+```

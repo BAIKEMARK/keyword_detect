@@ -18,6 +18,8 @@ CNN commands and checkpoints remain unchanged.
 - Read 16 kHz enrollment and query waveforms from the existing zip archives.
 - Cap each waveform at 2.5 seconds (40,000 samples). This covers the observed
   dev maximum of 2.34 seconds.
+- Apply WavLM-compatible zero-mean, unit-variance normalization after optional
+  query augmentation and truncation.
 - Dynamically pad enrollment and query waveforms to the longest waveform in the
   batch, with an upper bound of 2.5 seconds.
 - Return sample lengths so WavLM output padding can be excluded from matching.
