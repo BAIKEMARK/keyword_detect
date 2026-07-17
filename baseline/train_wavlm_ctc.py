@@ -14,7 +14,7 @@ from ctc_data import (CTCScoreDataset, CTCUtteranceDataset,
                       ctc_score_collate, ctc_utterance_collate,
                       load_ctc_score_pairs, load_ctc_training_examples)
 from ctc_score import normalized_ctc_score
-from ctc_text import CharacterVocabulary, required_ctc_frames
+from ctc_text import build_vocabulary, required_ctc_frames, warm_vocabulary
 from data import NoiseAugmenter
 from runtime import select_device, should_pin_memory
 from wavlm_ctc_model import FrozenWavLMCTC
@@ -23,6 +23,7 @@ from wavlm_ctc_model import FrozenWavLMCTC
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-id", default="microsoft/wavlm-base-plus")
+    parser.add_argument("--units", choices=("char", "phoneme"), default="char")
     parser.add_argument("--max-seconds", type=float, default=2.5)
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--epochs", type=int, default=3)
@@ -43,7 +44,7 @@ def parse_args():
     parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument(
         "--out",
-        default=os.path.join(PATHS.ckpt_dir, "wavlm_char_ctc_100k.pt"),
+        default=None,
     )
     return parser.parse_args()
 
@@ -132,8 +133,17 @@ def main():
     if max_samples <= 0:
         raise ValueError("--max-seconds must be positive")
 
-    vocabulary = CharacterVocabulary()
+    vocabulary = build_vocabulary(args.units)
     examples = load_ctc_training_examples(PATHS.train_csv)
+    if args.units == "phoneme":
+        texts = [example["text"] for example in examples]
+        for csv_path in (PATHS.dev_seen_csv, PATHS.dev_unseen_csv):
+            texts.extend(
+                pair["enroll_text"]
+                for pair in load_ctc_score_pairs(csv_path, with_label=True)
+            )
+        pronunciation_count = warm_vocabulary(vocabulary, texts)
+        print(f"pronunciations: {pronunciation_count} unique", flush=True)
     count = min(args.subset, len(examples))
     indices = np.random.default_rng(TRAIN.seed).permutation(len(examples))[:count]
     train_examples = [examples[index] for index in indices]
@@ -141,6 +151,7 @@ def main():
     print(f"device: {device}", flush=True)
     print(f"workers: {args.workers}", flush=True)
     print(f"model: {args.model_id} (frozen)", flush=True)
+    print(f"units: {args.units}", flush=True)
     print(f"vocabulary: {len(vocabulary)} classes", flush=True)
     print(f"max audio: {max_samples} samples ({args.max_seconds:.2f}s)",
           flush=True)
@@ -184,6 +195,9 @@ def main():
     criterion = torch.nn.CTCLoss(
         blank=vocabulary.blank_id, reduction="mean", zero_infinity=True)
     scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
+    if args.out is None:
+        args.out = os.path.join(
+            PATHS.ckpt_dir, f"wavlm_{args.units}_ctc_100k.pt")
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
 
     best = -1.0
@@ -246,6 +260,7 @@ def main():
             torch.save({
                 "head": model.head_state_dict(),
                 "model_id": args.model_id,
+                "units": args.units,
                 "vocabulary": vocabulary.symbols,
                 "dropout": args.dropout,
                 "max_samples": max_samples,

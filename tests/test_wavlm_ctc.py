@@ -19,7 +19,9 @@ from ctc_data import (CTCScoreDataset, collate_ctc_scores,  # noqa: E402
                       collate_ctc_utterances, load_ctc_score_pairs,
                       load_ctc_training_examples)
 from ctc_score import ctc_log_probability, normalized_ctc_score  # noqa: E402
-from ctc_text import CharacterVocabulary, required_ctc_frames  # noqa: E402
+from ctc_text import (CharacterVocabulary, PhonemeVocabulary,  # noqa: E402
+                      build_vocabulary, checkpoint_units,
+                      required_ctc_frames, warm_vocabulary)
 from train_wavlm_ctc import ctc_valid_mask  # noqa: E402
 from wavlm_ctc_model import FrozenWavLMCTC  # noqa: E402
 
@@ -46,6 +48,52 @@ class CharacterVocabularyTest(unittest.TestCase):
         lengths = torch.tensor([6, 6])
         torch.testing.assert_close(
             required_ctc_frames(targets, lengths), torch.tensor([7, 6]))
+
+
+class PhonemeVocabularyTest(unittest.TestCase):
+    def test_fixed_inventory_and_stress_removal(self):
+        vocabulary = PhonemeVocabulary(
+            converter=lambda text: ["HH", "AH0", " ", "L", "OW1", "'"])
+        self.assertEqual(len(vocabulary), 40)
+        self.assertEqual(vocabulary.symbols[0], "<blank>")
+        self.assertEqual(vocabulary.normalize(" Hello "), "hello")
+        expected = torch.tensor([
+            vocabulary.symbols.index(phone)
+            for phone in ("HH", "AH", "L", "OW")
+        ])
+        torch.testing.assert_close(vocabulary.encode("Hello"), expected)
+
+    def test_rejects_empty_and_unsupported_pronunciations(self):
+        for output in ([" "], ["HH", "?"]):
+            with self.subTest(output=output):
+                vocabulary = PhonemeVocabulary(
+                    converter=lambda text, result=output: result)
+                with self.assertRaises(ValueError):
+                    vocabulary.encode("hello")
+
+    def test_build_vocabulary_and_old_checkpoint_default(self):
+        self.assertIsInstance(build_vocabulary("char"), CharacterVocabulary)
+        vocabulary = build_vocabulary(
+            "phoneme", phoneme_converter=lambda text: ["K", "AE1", "T"])
+        self.assertIsInstance(vocabulary, PhonemeVocabulary)
+        self.assertEqual(checkpoint_units({}), "char")
+        self.assertEqual(checkpoint_units({"units": "phoneme"}), "phoneme")
+        with self.assertRaises(ValueError):
+            build_vocabulary("word")
+        with self.assertRaises(ValueError):
+            checkpoint_units({"units": "word"})
+
+    def test_warm_vocabulary_deduplicates_text(self):
+        calls = []
+
+        def convert(text):
+            calls.append(text)
+            return ["K", "AE1", "T"]
+
+        vocabulary = PhonemeVocabulary(converter=convert)
+        count = warm_vocabulary(vocabulary, ["cat", " Cat ", "cat"])
+        self.assertEqual(count, 1)
+        self.assertEqual(calls, ["cat"])
 
 
 class CTCDataTest(unittest.TestCase):

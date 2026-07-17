@@ -7,8 +7,9 @@ import os
 import torch
 
 from config import PATHS, TRAIN
+from ctc_data import load_ctc_score_pairs
 from ctc_score import normalized_ctc_score
-from ctc_text import CharacterVocabulary
+from ctc_text import build_vocabulary, checkpoint_units, warm_vocabulary
 from runtime import select_device
 from train_wavlm_ctc import ctc_valid_mask, make_score_loader
 from wavlm_ctc_model import FrozenWavLMCTC
@@ -69,9 +70,19 @@ def main():
     amp_enabled = args.amp and device.type == "cuda"
     checkpoint = torch.load(args.ckpt, map_location="cpu", weights_only=False)
 
-    vocabulary = CharacterVocabulary()
+    units = checkpoint_units(checkpoint)
+    vocabulary = build_vocabulary(units)
+    if units == "phoneme":
+        texts = []
+        for csv_path in (PATHS.eval_seen_csv, PATHS.eval_unseen_csv):
+            texts.extend(
+                pair["enroll_text"]
+                for pair in load_ctc_score_pairs(csv_path, with_label=False)
+            )
+        pronunciation_count = warm_vocabulary(vocabulary, texts)
+        print(f"pronunciations: {pronunciation_count} unique")
     if tuple(checkpoint["vocabulary"]) != vocabulary.symbols:
-        raise ValueError("checkpoint character vocabulary does not match code")
+        raise ValueError("checkpoint CTC vocabulary does not match code")
     model_id = args.model_id or checkpoint["model_id"]
     model = FrozenWavLMCTC(
         len(vocabulary), model_id, checkpoint["dropout"]).to(device)
@@ -79,6 +90,7 @@ def main():
     print(f"device: {device}")
     print(f"workers: {args.workers}")
     print(f"model: {model_id} (frozen)")
+    print(f"units: {units}")
     print(f"loaded {args.ckpt} (dev mean AUC={checkpoint.get('auc')})")
 
     seen_loader = make_score_loader(

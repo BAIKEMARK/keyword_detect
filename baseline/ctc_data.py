@@ -8,7 +8,7 @@ import torch
 from torch.utils.data import Dataset
 
 from config import AudioConfig
-from ctc_text import CharacterVocabulary
+from ctc_text import CTCVocabulary
 from data import (NoiseAugmenter, normalize_waveform, read_wav,
                   truncate_waveform)
 
@@ -99,7 +99,7 @@ def _pad_waveforms(waveforms) -> torch.Tensor:
     return output
 
 
-def _encode_texts(texts, vocabulary: CharacterVocabulary):
+def _encode_texts(texts, vocabulary: CTCVocabulary):
     encoded = [vocabulary.encode(text) for text in texts]
     lengths = torch.tensor([len(target) for target in encoded], dtype=torch.long)
     targets = torch.full(
@@ -112,7 +112,7 @@ def _encode_texts(texts, vocabulary: CharacterVocabulary):
     return targets, lengths
 
 
-def collate_ctc_utterances(batch, vocabulary: CharacterVocabulary):
+def collate_ctc_utterances(batch, vocabulary: CTCVocabulary):
     waveforms = _pad_waveforms([item[0] for item in batch])
     sample_lengths = torch.tensor([item[3] for item in batch], dtype=torch.long)
     targets, target_lengths = _encode_texts(
@@ -121,7 +121,7 @@ def collate_ctc_utterances(batch, vocabulary: CharacterVocabulary):
     return waveforms, sample_lengths, targets, target_lengths, wav_names
 
 
-def collate_ctc_scores(batch, vocabulary: CharacterVocabulary):
+def collate_ctc_scores(batch, vocabulary: CTCVocabulary):
     waveforms = _pad_waveforms([item[0] for item in batch])
     sample_lengths = torch.tensor([item[4] for item in batch], dtype=torch.long)
     targets, target_lengths = _encode_texts(
@@ -132,9 +132,9 @@ def collate_ctc_scores(batch, vocabulary: CharacterVocabulary):
             pair_ids)
 
 
-def ctc_utterance_collate(vocabulary: CharacterVocabulary):
+def ctc_utterance_collate(vocabulary: CTCVocabulary):
     return partial(collate_ctc_utterances, vocabulary=vocabulary)
 
 
-def ctc_score_collate(vocabulary: CharacterVocabulary):
+def ctc_score_collate(vocabulary: CTCVocabulary):
     return partial(collate_ctc_scores, vocabulary=vocabulary)

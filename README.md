@@ -132,7 +132,7 @@ smoke test 完成 seen/unseen AUC 后，运行完整 10 万条训练音频实验
 ```bash
 python baseline/train_wavlm_ctc.py \
   --subset 100000 \
-  --epochs 3 \
+  --epochs 10 \
   --bs 128 \
   --workers 8 \
   --device cuda \
@@ -147,4 +147,74 @@ python baseline/infer_wavlm_ctc.py \
   --ckpt baseline/checkpoints/wavlm_char_ctc_100k.pt \
   --device cuda \
   --out submission_wavlm_char_ctc.csv
+```
+
+该字符 CTC 配置在 5 万 pair（展开为 10 万条音频文本）上取得开发集
+mean AUC 0.8111，线上 AUC 0.81103。
+
+## 音素 CTC：补充发音先验
+
+音素模式使用 `g2p_en` 将英文注册文本转换为固定的 39 类 ARPAbet
+音素。CMUdict 用于常见词，`g2p_en` 的 OOV 回退用于未登录词；G2P
+输出只作为自研 CTC 头的训练目标和输入特征，不直接参与唤醒判决。
+
+安装依赖并准备 NLTK 资源：
+
+```bash
+python3 -m pip install "numpy>=1.24,<2" "g2p-en==2.1.0"
+mkdir -p /mnt/workspace/nltk_data
+python3 -m nltk.downloader -d /mnt/workspace/nltk_data \
+  cmudict \
+  averaged_perceptron_tagger averaged_perceptron_tagger_eng
+export NLTK_DATA=/mnt/workspace/nltk_data
+```
+
+`/mnt/workspace/nltk_data` 是 DSW 持久化目录，新实例继续设置同一个
+`NLTK_DATA` 即可复用。外部发音资源来源：
+[g2p_en](https://github.com/Kyubyong/g2p) 和
+[CMUdict](https://github.com/cmusphinx/cmudict)。
+
+`g2p_en 2.1.0` 与 NumPy 2.x 存在 OOV 推理数值溢出，因此音素模式固定
+使用 NumPy 1.x；字符 CTC 不受该问题影响。
+
+先在 A10 上运行 256 条 smoke test：
+
+```bash
+python3 baseline/train_wavlm_ctc.py \
+  --model-id /mnt/workspace/models/wavlm-base-plus \
+  --units phoneme \
+  --subset 256 \
+  --epochs 1 \
+  --bs 64 \
+  --workers 8 \
+  --device cuda \
+  --noise-dir noise/DEMAND_16k/wav \
+  --out baseline/checkpoints/wavlm_phoneme_ctc_smoke.pt
+```
+
+smoke test 完成 seen/unseen 评估后，训练全部 10 万条音频：
+
+```bash
+python3 baseline/train_wavlm_ctc.py \
+  --model-id /mnt/workspace/models/wavlm-base-plus \
+  --units phoneme \
+  --subset 100000 \
+  --epochs 10 \
+  --bs 128 \
+  --workers 8 \
+  --device cuda \
+  --noise-dir noise/DEMAND_16k/wav \
+  --out baseline/checkpoints/wavlm_phoneme_ctc_100k_e10.pt
+```
+
+生成音素 CTC-only 提交文件：
+
+```bash
+python3 baseline/infer_wavlm_ctc.py \
+  --ckpt baseline/checkpoints/wavlm_phoneme_ctc_100k_e10.pt \
+  --model-id /mnt/workspace/models/wavlm-base-plus \
+  --bs 128 \
+  --workers 8 \
+  --device cuda \
+  --out submission_wavlm_phoneme_ctc_100k.csv
 ```

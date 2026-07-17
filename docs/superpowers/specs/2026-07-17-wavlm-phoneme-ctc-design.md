@@ -21,9 +21,10 @@ avoiding a system-level eSpeak dependency.
 
 Use a fixed inventory consisting of CTC blank plus the standard 39 English
 ARPAbet phones. Remove lexical-stress suffixes `0`, `1`, and `2` so that, for
-example, `AH0` and `AH1` both map to `AH`. Ignore only whitespace separators
-emitted by `g2p_en`; reject empty pronunciations and unexpected symbols. Do not
-derive the vocabulary from train, dev, or eval text.
+example, `AH0` and `AH1` both map to `AH`. Ignore whitespace separators and a
+standalone apostrophe emitted for possessives such as `servants'`; reject empty
+pronunciations and all other unexpected symbols. Do not derive the vocabulary
+from train, dev, or eval text.
 
 Cache pronunciations by normalized text within each process because the
 50,000 training pairs contain many repeated keywords. The G2P output is an
@@ -65,9 +66,12 @@ submissions.
 ## Dependencies And Reproducibility
 
 Add a pinned-compatible `g2p_en` dependency to `requirements.txt` and document
-it as an external pronunciation resource in the README. If its required NLTK
-resources are absent, fail before training with a concrete setup message rather
-than failing inside a data-loader worker.
+it as an external pronunciation resource in the README. Persist CMUdict and
+the old and English-specific averaged perceptron taggers under
+`/mnt/workspace/nltk_data`. If these resources are absent, fail before training
+with a concrete setup message rather than failing inside a data-loader worker.
+Pin NumPy below 2 because `g2p_en 2.1.0` produces numerical-overflow warnings
+for almost every OOV prediction under NumPy 2.x.
 
 The server smoke test must initialize the phoneme vocabulary in the main
 process before workers start. The model path remains the persistent local
