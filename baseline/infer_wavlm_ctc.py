@@ -32,11 +32,12 @@ def parse_args():
 
 
 @torch.no_grad()
-def predict(model, loader, prefix, device, amp_enabled, blank_id):
+def collect_scores(model, loader, device, amp_enabled, blank_id):
     rows = []
     model.eval()
     for batch in loader:
-        waveforms, sample_lengths, targets, target_lengths, _, pair_ids = batch
+        (waveforms, sample_lengths, targets, target_lengths,
+         labels, pair_ids) = batch
         waveforms = waveforms.to(device, non_blocking=True)
         sample_lengths = sample_lengths.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
@@ -52,14 +53,25 @@ def predict(model, loader, prefix, device, amp_enabled, blank_id):
             scores[valid] = normalized_ctc_score(
                 log_probs[valid], output_lengths[valid], targets[valid],
                 target_lengths[valid], blank_id)
-        posteriors = torch.sigmoid(scores).cpu()
-        if not torch.isfinite(posteriors).all():
-            raise RuntimeError("CTC inference produced non-finite posteriors")
+        scores = scores.cpu()
+        if not torch.isfinite(scores).all():
+            raise RuntimeError("CTC inference produced non-finite scores")
         rows.extend(
-            (f"{prefix}_{pair_id}", posterior)
-            for pair_id, posterior in zip(pair_ids, posteriors.tolist())
+            (pair_id, score, int(label) if label >= 0 else None)
+            for pair_id, score, label in zip(
+                pair_ids, scores.tolist(), labels.tolist())
         )
     return rows
+
+
+def predict(model, loader, prefix, device, amp_enabled, blank_id):
+    rows = collect_scores(model, loader, device, amp_enabled, blank_id)
+    scores = torch.tensor([row[1] for row in rows], dtype=torch.float32)
+    posteriors = torch.sigmoid(scores).tolist()
+    return [
+        (f"{prefix}_{pair_id}", posterior)
+        for (pair_id, _, _), posterior in zip(rows, posteriors)
+    ]
 
 
 def main():

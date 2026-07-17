@@ -22,6 +22,7 @@ from ctc_score import ctc_log_probability, normalized_ctc_score  # noqa: E402
 from ctc_text import (CharacterVocabulary, PhonemeVocabulary,  # noqa: E402
                       build_vocabulary, checkpoint_units,
                       required_ctc_frames, warm_vocabulary)
+from infer_wavlm_ctc import collect_scores  # noqa: E402
 from train_wavlm_ctc import ctc_valid_mask  # noqa: E402
 from wavlm_ctc_model import FrozenWavLMCTC  # noqa: E402
 
@@ -213,6 +214,37 @@ class CTCScoreTest(unittest.TestCase):
             torch.tensor([6]), targets, target_lengths).item())
         self.assertTrue(ctc_valid_mask(
             torch.tensor([7]), targets, target_lengths).item())
+
+    def test_collect_scores_preserves_ids_labels_and_raw_scores(self):
+        vocabulary = CharacterVocabulary()
+        torch.manual_seed(31)
+        log_probs = torch.randn(2, 5, len(vocabulary)).log_softmax(dim=-1)
+        output_lengths = torch.tensor([5, 4])
+
+        class FakeModel:
+            def eval(self):
+                return self
+
+            def log_probs(self, waveforms, sample_lengths):
+                return log_probs, output_lengths
+
+        targets = torch.stack([
+            vocabulary.encode("a"), vocabulary.encode("b")])
+        target_lengths = torch.tensor([1, 1])
+        loader = [(
+            torch.zeros(2, 8), torch.tensor([8, 7]), targets,
+            target_lengths, torch.tensor([1.0, 0.0]), ["pair_1", "pair_2"],
+        )]
+        rows = collect_scores(
+            FakeModel(), loader, torch.device("cpu"), False,
+            vocabulary.blank_id)
+        expected = normalized_ctc_score(
+            log_probs, output_lengths, targets, target_lengths,
+            vocabulary.blank_id)
+        self.assertEqual([row[0] for row in rows], ["pair_1", "pair_2"])
+        self.assertEqual([row[2] for row in rows], [1, 0])
+        np.testing.assert_allclose(
+            [row[1] for row in rows], expected.numpy(), rtol=1e-6)
 
 
 class FrozenWavLMCTCTest(unittest.TestCase):

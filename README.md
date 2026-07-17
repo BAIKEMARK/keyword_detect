@@ -218,3 +218,44 @@ python3 baseline/infer_wavlm_ctc.py \
   --device cuda \
   --out submission_wavlm_phoneme_ctc_100k.csv
 ```
+
+## 字符与音素 CTC 秩融合
+
+融合只需要额外导出两个模型在有标签 dev 上的逐样本分数。测试集直接复用
+已经生成的字符和音素提交 CSV。先导出 dev 分数：
+
+```bash
+mkdir -p scores
+export NLTK_DATA=/mnt/workspace/nltk_data
+
+python3 baseline/export_wavlm_ctc_dev.py \
+  --ckpt baseline/checkpoints/wavlm_char_ctc_100k_e10.pt \
+  --model-id /mnt/workspace/models/wavlm-base-plus \
+  --bs 128 \
+  --workers 8 \
+  --device cuda \
+  --out scores/dev_wavlm_char_ctc_100k.csv
+
+python3 baseline/export_wavlm_ctc_dev.py \
+  --ckpt baseline/checkpoints/wavlm_phoneme_ctc_100k_e10.pt \
+  --model-id /mnt/workspace/models/wavlm-base-plus \
+  --bs 128 \
+  --workers 8 \
+  --device cuda \
+  --out scores/dev_wavlm_phoneme_ctc_100k.csv
+```
+
+搜索全局音素权重并生成融合提交：
+
+```bash
+python3 baseline/fuse_ctc_scores.py \
+  --char-dev scores/dev_wavlm_char_ctc_100k.csv \
+  --phoneme-dev scores/dev_wavlm_phoneme_ctc_100k.csv \
+  --char-eval submission_wavlm_char_ctc_100k.csv \
+  --phoneme-eval submission_wavlm_phoneme_ctc_100k.csv \
+  --out submission_wavlm_ctc_rank_fusion.csv
+```
+
+脚本分别在 seen/unseen 内对两个分支做平均秩归一化，在 dev 上以 0.001
+步长搜索一个全局音素权重，然后将固定权重应用于 eval。实验参数和 dev
+AUC 同时写入 `submission_wavlm_ctc_rank_fusion.csv.json`。
