@@ -55,8 +55,10 @@ classifier with PyTorch CTC loss:
 - Mean reduction.
 - `zero_infinity=True`.
 
-Reject a batch before loss calculation if any target needs more CTC frames than
-its audio provides after accounting for adjacent repeated characters.
+Before loss calculation, exclude only training utterances whose targets need
+more CTC frames than their audio provides after accounting for adjacent
+repeated characters. Count and log every exclusion. A scan of the 100,000
+visible training utterances found three such cases.
 
 ## CTC-Only Pair Scoring
 
@@ -78,6 +80,11 @@ score because AUC depends only on ranking.
 Development scoring must never read `query_txt`. The data loader for CTC pair
 evaluation exposes only pair id, enrollment text, query waveform, label when
 available, and query sample length.
+
+An enrollment target that cannot fit into the available query frames has exact
+CTC probability zero. Keep the pair in dev/eval and assign a shared finite
+score floor; never remove it or inspect its label. Visible dev contains three
+such pairs per subset and eval contains 32 per subset.
 
 ## Training And Checkpoint
 

@@ -1,0 +1,105 @@
+from __future__ import annotations
+
+import argparse
+import csv
+import os
+
+import torch
+
+from config import PATHS, TRAIN
+from ctc_score import normalized_ctc_score
+from ctc_text import CharacterVocabulary
+from runtime import select_device
+from train_wavlm_ctc import ctc_valid_mask, make_score_loader
+from wavlm_ctc_model import FrozenWavLMCTC
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--ckpt",
+        default=os.path.join(PATHS.ckpt_dir, "wavlm_char_ctc_100k.pt"),
+    )
+    parser.add_argument("--out", default="submission_wavlm_char_ctc.csv")
+    parser.add_argument("--model-id", default=None)
+    parser.add_argument("--bs", type=int, default=128)
+    parser.add_argument("--workers", type=int, default=None)
+    parser.add_argument("--device", default="auto")
+    parser.add_argument(
+        "--amp", action=argparse.BooleanOptionalAction, default=True)
+    return parser.parse_args()
+
+
+@torch.no_grad()
+def predict(model, loader, prefix, device, amp_enabled, blank_id):
+    rows = []
+    model.eval()
+    for batch in loader:
+        waveforms, sample_lengths, targets, target_lengths, _, pair_ids = batch
+        waveforms = waveforms.to(device, non_blocking=True)
+        sample_lengths = sample_lengths.to(device, non_blocking=True)
+        targets = targets.to(device, non_blocking=True)
+        target_lengths = target_lengths.to(device, non_blocking=True)
+        with torch.autocast(
+                device_type=device.type, dtype=torch.float16,
+                enabled=amp_enabled):
+            log_probs, output_lengths = model.log_probs(
+                waveforms, sample_lengths)
+        valid = ctc_valid_mask(output_lengths, targets, target_lengths)
+        scores = log_probs.new_full((len(pair_ids),), -1e4)
+        if valid.any():
+            scores[valid] = normalized_ctc_score(
+                log_probs[valid], output_lengths[valid], targets[valid],
+                target_lengths[valid], blank_id)
+        posteriors = torch.sigmoid(scores).cpu()
+        if not torch.isfinite(posteriors).all():
+            raise RuntimeError("CTC inference produced non-finite posteriors")
+        rows.extend(
+            (f"{prefix}_{pair_id}", posterior)
+            for pair_id, posterior in zip(pair_ids, posteriors.tolist())
+        )
+    return rows
+
+
+def main():
+    args = parse_args()
+    device = select_device(args.device)
+    if args.workers is None:
+        args.workers = TRAIN.num_workers if device.type == "cuda" else 0
+    amp_enabled = args.amp and device.type == "cuda"
+    checkpoint = torch.load(args.ckpt, map_location="cpu", weights_only=False)
+
+    vocabulary = CharacterVocabulary()
+    if tuple(checkpoint["vocabulary"]) != vocabulary.symbols:
+        raise ValueError("checkpoint character vocabulary does not match code")
+    model_id = args.model_id or checkpoint["model_id"]
+    model = FrozenWavLMCTC(
+        len(vocabulary), model_id, checkpoint["dropout"]).to(device)
+    model.load_head_state_dict(checkpoint["head"])
+    print(f"device: {device}")
+    print(f"workers: {args.workers}")
+    print(f"model: {model_id} (frozen)")
+    print(f"loaded {args.ckpt} (dev mean AUC={checkpoint.get('auc')})")
+
+    seen_loader = make_score_loader(
+        PATHS.eval_seen_zip, PATHS.eval_seen_csv, checkpoint["max_samples"],
+        args.bs, args.workers, device, vocabulary, with_label=False)
+    unseen_loader = make_score_loader(
+        PATHS.eval_unseen_zip, PATHS.eval_unseen_csv, checkpoint["max_samples"],
+        args.bs, args.workers, device, vocabulary, with_label=False)
+    rows = predict(
+        model, seen_loader, "seen", device, amp_enabled, vocabulary.blank_id)
+    rows += predict(
+        model, unseen_loader, "unseen", device, amp_enabled,
+        vocabulary.blank_id)
+    print(f"total: {len(rows)} rows")
+
+    with open(args.out, "w", newline="", encoding="utf-8") as file:
+        writer = csv.writer(file)
+        writer.writerow(["id", "posterior"])
+        writer.writerows(rows)
+    print(f"wrote {args.out}")
+
+
+if __name__ == "__main__":
+    main()

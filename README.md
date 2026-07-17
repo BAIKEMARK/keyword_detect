@@ -110,3 +110,41 @@ python baseline/infer_wavlm.py \
   --device cuda \
   --out submission_wavlm_base_plus_50k.csv
 ```
+
+## 字符 CTC：使用注册文本处理 unseen
+
+字符 CTC 使用训练集提供的音频文本监督，推理时只读取测试提供的
+`enroll_txt` 和 query 音频，不读取未知的 query 文本。先运行 smoke test：
+
+```bash
+python baseline/train_wavlm_ctc.py \
+  --subset 256 \
+  --epochs 1 \
+  --bs 64 \
+  --workers 8 \
+  --device cuda \
+  --noise-dir noise/DEMAND_16k/wav \
+  --out baseline/checkpoints/wavlm_char_ctc_smoke.pt
+```
+
+smoke test 完成 seen/unseen AUC 后，运行完整 10 万条训练音频实验：
+
+```bash
+python baseline/train_wavlm_ctc.py \
+  --subset 100000 \
+  --epochs 3 \
+  --bs 128 \
+  --workers 8 \
+  --device cuda \
+  --noise-dir noise/DEMAND_16k/wav \
+  --out baseline/checkpoints/wavlm_char_ctc_100k.pt
+```
+
+生成 CTC-only 提交文件：
+
+```bash
+python baseline/infer_wavlm_ctc.py \
+  --ckpt baseline/checkpoints/wavlm_char_ctc_100k.pt \
+  --device cuda \
+  --out submission_wavlm_char_ctc.csv
+```
