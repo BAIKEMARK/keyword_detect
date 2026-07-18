@@ -23,7 +23,7 @@ from ctc_text import (CharacterVocabulary, PhonemeVocabulary,  # noqa: E402
                       build_vocabulary, checkpoint_units,
                       required_ctc_frames, warm_vocabulary)
 from infer_wavlm_ctc import collect_scores  # noqa: E402
-from train_wavlm_ctc import ctc_valid_mask  # noqa: E402
+from train_wavlm_ctc import ctc_valid_mask, parse_args  # noqa: E402
 from wavlm_ctc_model import FrozenWavLMCTC  # noqa: E402
 
 
@@ -170,6 +170,15 @@ class CTCDataTest(unittest.TestCase):
         load_waveform.assert_called_once()
         self.assertEqual(load_waveform.call_args.args[1],
                          "wav/pair_9_query.wav")
+
+    def test_training_cli_supports_full_data_paths(self):
+        args = parse_args([
+            "--train-zip", "train/wav.zip",
+            "--train-csv", "train/train_label.csv",
+        ])
+        self.assertEqual(args.train_zip, "train/wav.zip")
+        self.assertEqual(args.train_csv, "train/train_label.csv")
+        self.assertIsNone(args.subset)
 
 
 class CTCScoreTest(unittest.TestCase):

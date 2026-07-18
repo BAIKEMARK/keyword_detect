@@ -259,3 +259,38 @@ python3 baseline/fuse_ctc_scores.py \
 脚本分别在 seen/unseen 内对两个分支做平均秩归一化，在 dev 上以 0.001
 步长搜索一个全局音素权重，然后将固定权重应用于 eval。实验参数和 dev
 AUC 同时写入 `submission_wavlm_ctc_rank_fusion.csv.json`。
+
+## 全量50万 pair 训练
+
+官方全量包包含 `train/train_label.csv` 和嵌套的 `train/wav.zip`。只解压
+外层 `train.zip`，不要继续解压16GB的 `wav.zip`：
+
+```bash
+unzip -n train.zip -d .
+
+ls -lh train/train_label.csv train/wav.zip
+python3 -c "import csv; print(sum(1 for _ in csv.DictReader(open('train/train_label.csv', encoding='utf-8'))))"
+```
+
+50万 pair 会展开为约100万条音频文本。先运行3个全量 epoch 的音素 CTC：
+
+```bash
+export NLTK_DATA=/mnt/workspace/nltk_data
+
+python3 -u baseline/train_wavlm_ctc.py \
+  --model-id /mnt/workspace/models/wavlm-base-plus \
+  --units phoneme \
+  --train-csv train/train_label.csv \
+  --train-zip train/wav.zip \
+  --epochs 3 \
+  --bs 128 \
+  --workers 8 \
+  --device cuda \
+  --noise-prob 0.5 \
+  --noise-dir noise/DEMAND_16k/wav \
+  --out baseline/checkpoints/wavlm_phoneme_ctc_full_e3.pt
+```
+
+省略 `--subset` 表示使用 CSV 中的全部音频；仍可显式传入该参数做 smoke
+test。checkpoint 会记录实际训练 CSV、wav ZIP 和音频数量。根据前三轮 dev
+走势决定是否继续到5轮，不默认直接训练10轮。

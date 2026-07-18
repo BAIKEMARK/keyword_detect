@@ -20,16 +20,20 @@ from runtime import select_device, should_pin_memory
 from wavlm_ctc_model import FrozenWavLMCTC
 
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-id", default="microsoft/wavlm-base-plus")
     parser.add_argument("--units", choices=("char", "phoneme"), default="char")
+    parser.add_argument("--train-zip", default=PATHS.train_zip)
+    parser.add_argument("--train-csv", default=PATHS.train_csv)
     parser.add_argument("--max-seconds", type=float, default=2.5)
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--bs", type=int, default=128)
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--subset", type=int, default=100000)
+    parser.add_argument(
+        "--subset", type=int, default=None,
+        help="number of utterances; omit to use all training audio")
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument("--device", default="auto")
     parser.add_argument(
@@ -46,13 +50,13 @@ def parse_args():
         "--out",
         default=None,
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def make_train_loader(examples, max_samples, batch_size, workers, device,
-                      vocabulary, augment):
+def make_train_loader(examples, train_zip, max_samples, batch_size, workers,
+                      device, vocabulary, augment):
     dataset = CTCUtteranceDataset(
-        examples, PATHS.train_zip, AUDIO, max_samples, augment)
+        examples, train_zip, AUDIO, max_samples, augment)
     return DataLoader(
         dataset,
         batch_size=batch_size,
@@ -133,8 +137,14 @@ def main():
     if max_samples <= 0:
         raise ValueError("--max-seconds must be positive")
 
+    for description, path in (
+            ("training CSV", args.train_csv),
+            ("training wav ZIP", args.train_zip)):
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"{description} not found: {path}")
+
     vocabulary = build_vocabulary(args.units)
-    examples = load_ctc_training_examples(PATHS.train_csv)
+    examples = load_ctc_training_examples(args.train_csv)
     if args.units == "phoneme":
         texts = [example["text"] for example in examples]
         for csv_path in (PATHS.dev_seen_csv, PATHS.dev_unseen_csv):
@@ -144,7 +154,10 @@ def main():
             )
         pronunciation_count = warm_vocabulary(vocabulary, texts)
         print(f"pronunciations: {pronunciation_count} unique", flush=True)
-    count = min(args.subset, len(examples))
+    if args.subset is not None and args.subset <= 0:
+        raise ValueError("--subset must be positive when provided")
+    count = len(examples) if args.subset is None else min(
+        args.subset, len(examples))
     indices = np.random.default_rng(TRAIN.seed).permutation(len(examples))[:count]
     train_examples = [examples[index] for index in indices]
 
@@ -152,6 +165,8 @@ def main():
     print(f"workers: {args.workers}", flush=True)
     print(f"model: {args.model_id} (frozen)", flush=True)
     print(f"units: {args.units}", flush=True)
+    print(f"train csv: {args.train_csv}", flush=True)
+    print(f"train wav: {args.train_zip}", flush=True)
     print(f"vocabulary: {len(vocabulary)} classes", flush=True)
     print(f"max audio: {max_samples} samples ({args.max_seconds:.2f}s)",
           flush=True)
@@ -176,7 +191,7 @@ def main():
           f"snr=[{args.noise_snr_min}, {args.noise_snr_max}]", flush=True)
 
     train_loader = make_train_loader(
-        train_examples, max_samples, args.bs, args.workers, device,
+        train_examples, args.train_zip, max_samples, args.bs, args.workers, device,
         vocabulary, augment)
     dev_seen = make_score_loader(
         PATHS.dev_seen_zip, PATHS.dev_seen_csv, max_samples, args.bs,
@@ -262,6 +277,9 @@ def main():
                 "model_id": args.model_id,
                 "units": args.units,
                 "vocabulary": vocabulary.symbols,
+                "train_csv": args.train_csv,
+                "train_zip": args.train_zip,
+                "train_utterances": count,
                 "dropout": args.dropout,
                 "max_samples": max_samples,
                 "noise_prob": args.noise_prob,
