@@ -50,6 +50,16 @@ def parse_args(argv=None):
         "--out",
         default=None,
     )
+    parser.add_argument(
+        "--last-out",
+        default=None,
+        help="latest epoch checkpoint; defaults to <out stem>.last.pt",
+    )
+    parser.add_argument(
+        "--resume",
+        default=None,
+        help="resume from the next epoch of this checkpoint",
+    )
     return parser.parse_args(argv)
 
 
@@ -95,6 +105,131 @@ def _move(tensor, device):
 
 def ctc_valid_mask(output_lengths, targets, target_lengths):
     return output_lengths >= required_ctc_frames(targets, target_lengths)
+
+
+def default_last_checkpoint_path(out_path):
+    stem, extension = os.path.splitext(out_path)
+    if not extension:
+        extension = ".pt"
+    return f"{stem}.last{extension}"
+
+
+def training_config(args, max_samples, train_utterances, amp_enabled, device):
+    return {
+        "model_id": args.model_id,
+        "units": args.units,
+        "train_csv": args.train_csv,
+        "train_zip": args.train_zip,
+        "train_utterances": train_utterances,
+        "max_samples": max_samples,
+        "dropout": args.dropout,
+        "batch_size": args.bs,
+        "learning_rate": args.lr,
+        "noise_prob": args.noise_prob,
+        "noise_snr_min": args.noise_snr_min,
+        "noise_snr_max": args.noise_snr_max,
+        "noise_dir": args.noise_dir,
+        "amp": amp_enabled,
+        "workers": args.workers,
+        "device": str(device),
+        "seed": TRAIN.seed,
+        "target_epochs": args.epochs,
+    }
+
+
+def _checkpoint_value(checkpoint, key):
+    config = checkpoint.get("training_config", {})
+    return config.get(key, checkpoint.get(key))
+
+
+def validate_resume_checkpoint(checkpoint, config, vocabulary):
+    expected = dict(config)
+    expected["vocabulary"] = tuple(vocabulary.symbols)
+    path_keys = {"train_csv", "train_zip", "noise_dir"}
+    checked_keys = (
+        "model_id", "units", "vocabulary", "train_csv", "train_zip",
+        "train_utterances", "max_samples", "dropout", "batch_size",
+        "learning_rate", "noise_prob", "noise_snr_min", "noise_snr_max",
+        "noise_dir", "seed",
+    )
+    mismatches = []
+    for key in checked_keys:
+        actual = _checkpoint_value(checkpoint, key)
+        if actual is None:
+            continue
+        wanted = expected[key]
+        if key == "vocabulary":
+            actual = tuple(actual)
+        elif key in path_keys:
+            actual = os.path.abspath(os.path.normpath(actual))
+            wanted = os.path.abspath(os.path.normpath(wanted))
+        if actual != wanted:
+            mismatches.append(f"{key}: checkpoint={actual!r}, current={wanted!r}")
+    if mismatches:
+        raise ValueError(
+            "resume checkpoint is incompatible:\n  " + "\n  ".join(mismatches))
+
+
+def capture_rng_state(device):
+    state = {
+        "torch": torch.get_rng_state(),
+        "numpy": np.random.get_state(),
+    }
+    if device.type == "cuda":
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def restore_rng_state(state, device):
+    if not state:
+        return
+    torch.set_rng_state(state["torch"])
+    np.random.set_state(state["numpy"])
+    if device.type == "cuda" and "cuda" in state:
+        torch.cuda.set_rng_state_all(state["cuda"])
+
+
+def atomic_torch_save(state, path):
+    temporary = f"{path}.tmp-{os.getpid()}"
+    try:
+        torch.save(state, temporary)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.remove(temporary)
+
+
+def checkpoint_state(model, optimizer, scaler, config, vocabulary, device,
+                     epoch, seen_auc, unseen_auc, mean_auc, best_auc,
+                     best_epoch):
+    return {
+        "format_version": 2,
+        "head": model.head_state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "scaler": scaler.state_dict(),
+        "rng_state": capture_rng_state(device),
+        "training_config": config,
+        "model_id": config["model_id"],
+        "units": config["units"],
+        "vocabulary": vocabulary.symbols,
+        "train_csv": config["train_csv"],
+        "train_zip": config["train_zip"],
+        "train_utterances": config["train_utterances"],
+        "dropout": config["dropout"],
+        "max_samples": config["max_samples"],
+        "noise_prob": config["noise_prob"],
+        "noise_snr_min": config["noise_snr_min"],
+        "noise_snr_max": config["noise_snr_max"],
+        "noise_dir": config["noise_dir"],
+        "batch_size": config["batch_size"],
+        "learning_rate": config["learning_rate"],
+        "auc": mean_auc,
+        "seen_auc": seen_auc,
+        "unseen_auc": unseen_auc,
+        "best_auc": best_auc,
+        "best_epoch": best_epoch,
+        "epoch": epoch,
+    }
 
 
 @torch.no_grad()
@@ -172,6 +307,10 @@ def main():
           flush=True)
     print(f"amp: {amp_enabled}", flush=True)
     print(f"train utterances: {count} / {len(examples)}", flush=True)
+    print(f"epochs: target={args.epochs}", flush=True)
+    print(f"batch size: {args.bs}", flush=True)
+    print(f"learning rate: {args.lr}", flush=True)
+    print(f"process id: {os.getpid()}", flush=True)
 
     augment = None
     if args.noise_prob > 0:
@@ -189,6 +328,27 @@ def main():
         print(f"real noise files: {len(augment.noise_paths)}", flush=True)
     print(f"audio noise: prob={args.noise_prob} "
           f"snr=[{args.noise_snr_min}, {args.noise_snr_max}]", flush=True)
+
+    if args.out is None:
+        args.out = os.path.join(
+            PATHS.ckpt_dir, f"wavlm_{args.units}_ctc_100k.pt")
+    if args.last_out is None:
+        args.last_out = default_last_checkpoint_path(args.out)
+    if os.path.abspath(args.out) == os.path.abspath(args.last_out):
+        raise ValueError("--out and --last-out must be different files")
+    for checkpoint_path in (args.out, args.last_out):
+        os.makedirs(os.path.dirname(checkpoint_path) or ".", exist_ok=True)
+
+    config = training_config(
+        args, max_samples, count, amp_enabled, device)
+    resume_checkpoint = None
+    if args.resume is not None:
+        if not os.path.isfile(args.resume):
+            raise FileNotFoundError(
+                f"resume checkpoint not found: {args.resume}")
+        resume_checkpoint = torch.load(
+            args.resume, map_location="cpu", weights_only=False)
+        validate_resume_checkpoint(resume_checkpoint, config, vocabulary)
 
     train_loader = make_train_loader(
         train_examples, args.train_zip, max_samples, args.bs, args.workers, device,
@@ -210,13 +370,39 @@ def main():
     criterion = torch.nn.CTCLoss(
         blank=vocabulary.blank_id, reduction="mean", zero_infinity=True)
     scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
-    if args.out is None:
-        args.out = os.path.join(
-            PATHS.ckpt_dir, f"wavlm_{args.units}_ctc_100k.pt")
-    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
 
     best = -1.0
-    for epoch in range(1, args.epochs + 1):
+    best_epoch = 0
+    start_epoch = 1
+    if resume_checkpoint is not None:
+        model.load_head_state_dict(resume_checkpoint["head"])
+        completed_epoch = int(resume_checkpoint.get("epoch", 0))
+        start_epoch = completed_epoch + 1
+        best = float(resume_checkpoint.get(
+            "best_auc", resume_checkpoint.get("auc", -1.0)))
+        best_epoch = int(resume_checkpoint.get(
+            "best_epoch", completed_epoch if best >= 0 else 0))
+        if "optimizer" in resume_checkpoint:
+            optimizer.load_state_dict(resume_checkpoint["optimizer"])
+        else:
+            print("resume compatibility mode: optimizer state missing; "
+                  "using a new optimizer", flush=True)
+        if "scaler" in resume_checkpoint:
+            scaler.load_state_dict(resume_checkpoint["scaler"])
+        elif amp_enabled:
+            print("resume compatibility mode: AMP scaler state missing; "
+                  "using a new scaler", flush=True)
+        restore_rng_state(resume_checkpoint.get("rng_state"), device)
+        print(f"resumed {args.resume}: completed_epoch={completed_epoch} "
+              f"best={best:.4f} best_epoch={best_epoch}", flush=True)
+    if args.epochs < start_epoch:
+        raise ValueError(
+            f"--epochs={args.epochs} is smaller than the next resume epoch "
+            f"{start_epoch}; --epochs is the target total epoch count")
+
+    print(f"best checkpoint: {args.out}", flush=True)
+    print(f"latest checkpoint: {args.last_out}", flush=True)
+    for epoch in range(start_epoch, args.epochs + 1):
         model.train()
         started = time.time()
         loss_sum = 0.0
@@ -270,30 +456,21 @@ def main():
               f"peak_cuda={peak_gb:.2f}GB skipped_ctc={skipped_epoch}",
               flush=True)
 
-        if mean_auc > best:
+        improved = mean_auc > best
+        if improved:
             best = mean_auc
-            torch.save({
-                "head": model.head_state_dict(),
-                "model_id": args.model_id,
-                "units": args.units,
-                "vocabulary": vocabulary.symbols,
-                "train_csv": args.train_csv,
-                "train_zip": args.train_zip,
-                "train_utterances": count,
-                "dropout": args.dropout,
-                "max_samples": max_samples,
-                "noise_prob": args.noise_prob,
-                "noise_snr_min": args.noise_snr_min,
-                "noise_snr_max": args.noise_snr_max,
-                "noise_dir": args.noise_dir,
-                "auc": mean_auc,
-                "seen_auc": seen_auc,
-                "unseen_auc": unseen_auc,
-                "epoch": epoch,
-            }, args.out)
-            print(f"  saved -> {args.out}", flush=True)
+            best_epoch = epoch
+        state = checkpoint_state(
+            model, optimizer, scaler, config, vocabulary, device,
+            epoch, seen_auc, unseen_auc, mean_auc, best, best_epoch)
+        atomic_torch_save(state, args.last_out)
+        print(f"  saved latest -> {args.last_out}", flush=True)
+        if improved:
+            atomic_torch_save(state, args.out)
+            print(f"  saved best -> {args.out}", flush=True)
 
-    print(f"done. best dev mean AUC = {best:.4f}", flush=True)
+    print(f"done. best dev mean AUC = {best:.4f} "
+          f"at epoch {best_epoch}", flush=True)
 
 
 if __name__ == "__main__":

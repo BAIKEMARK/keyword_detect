@@ -294,3 +294,32 @@ python3 -u baseline/train_wavlm_ctc.py \
 省略 `--subset` 表示使用 CSV 中的全部音频；仍可显式传入该参数做 smoke
 test。checkpoint 会记录实际训练 CSV、wav ZIP 和音频数量。根据前三轮 dev
 走势决定是否继续到5轮，不默认直接训练10轮。
+
+### 从 checkpoint 继续训练
+
+`--epochs` 是目标总轮数，不是额外轮数。下面从已完成的全量 epoch 2 继续，
+训练到 epoch 5：
+
+```bash
+export NLTK_DATA=/mnt/workspace/nltk_data
+
+python3 -u baseline/train_wavlm_ctc.py \
+  --model-id /mnt/workspace/models/wavlm-base-plus \
+  --units phoneme \
+  --train-csv train/train_label.csv \
+  --train-zip train/wav.zip \
+  --epochs 5 \
+  --bs 128 \
+  --workers 8 \
+  --device cuda \
+  --noise-prob 0.5 \
+  --noise-dir noise/DEMAND_16k/wav \
+  --resume baseline/checkpoints/wavlm_phoneme_ctc_full_e3.pt \
+  --out baseline/checkpoints/wavlm_phoneme_ctc_full_e3.pt
+```
+
+`--out` 保存历史最佳 Dev Mean checkpoint；默认派生出的
+`wavlm_phoneme_ctc_full_e3.last.pt` 每轮保存最新状态。旧 checkpoint 没有
+optimizer 和 AMP scaler，首次恢复会以兼容模式重建这两项；之后服务器中断时，
+改用 `--resume baseline/checkpoints/wavlm_phoneme_ctc_full_e3.last.pt` 即可完整恢复
+最近一个已完成 epoch 的训练状态。

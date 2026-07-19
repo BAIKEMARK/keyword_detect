@@ -23,7 +23,10 @@ from ctc_text import (CharacterVocabulary, PhonemeVocabulary,  # noqa: E402
                       build_vocabulary, checkpoint_units,
                       required_ctc_frames, warm_vocabulary)
 from infer_wavlm_ctc import collect_scores  # noqa: E402
-from train_wavlm_ctc import ctc_valid_mask, parse_args  # noqa: E402
+from train_wavlm_ctc import (ctc_valid_mask,  # noqa: E402
+                             default_last_checkpoint_path, parse_args,
+                             training_config,
+                             validate_resume_checkpoint)
 from wavlm_ctc_model import FrozenWavLMCTC  # noqa: E402
 
 
@@ -175,10 +178,55 @@ class CTCDataTest(unittest.TestCase):
         args = parse_args([
             "--train-zip", "train/wav.zip",
             "--train-csv", "train/train_label.csv",
+            "--resume", "checkpoint.pt",
+            "--last-out", "latest.pt",
         ])
         self.assertEqual(args.train_zip, "train/wav.zip")
         self.assertEqual(args.train_csv, "train/train_label.csv")
         self.assertIsNone(args.subset)
+        self.assertEqual(args.resume, "checkpoint.pt")
+        self.assertEqual(args.last_out, "latest.pt")
+
+    def test_resume_checkpoint_paths_and_compatibility(self):
+        self.assertEqual(
+            default_last_checkpoint_path("checkpoints/model.pt"),
+            "checkpoints/model.last.pt")
+        self.assertEqual(
+            default_last_checkpoint_path("checkpoints/model"),
+            "checkpoints/model.last.pt")
+
+        args = parse_args([
+            "--model-id", "local/wavlm",
+            "--units", "char",
+            "--train-zip", "train/wav.zip",
+            "--train-csv", "train/train_label.csv",
+            "--bs", "128",
+        ])
+        args.workers = 0
+        config = training_config(
+            args, max_samples=40000, train_utterances=1000000,
+            amp_enabled=False, device=torch.device("cpu"))
+        vocabulary = CharacterVocabulary()
+
+        legacy_checkpoint = {
+            "model_id": "local/wavlm",
+            "units": "char",
+            "vocabulary": vocabulary.symbols,
+            "train_zip": "train/wav.zip",
+            "train_csv": "train/train_label.csv",
+            "train_utterances": 1000000,
+            "max_samples": 40000,
+            "dropout": 0.1,
+        }
+        validate_resume_checkpoint(
+            legacy_checkpoint, config, vocabulary)
+
+        new_checkpoint = dict(legacy_checkpoint)
+        new_checkpoint["training_config"] = dict(config)
+        new_checkpoint["training_config"]["batch_size"] = 256
+        with self.assertRaisesRegex(ValueError, "batch_size"):
+            validate_resume_checkpoint(
+                new_checkpoint, config, vocabulary)
 
 
 class CTCScoreTest(unittest.TestCase):
