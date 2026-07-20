@@ -111,6 +111,39 @@ python baseline/infer_wavlm.py \
   --out submission_wavlm_base_plus_50k.csv
 ```
 
+### 全量50万 pair 音频匹配
+
+`train_wavlm.py` 的默认路径仍指向 5 万子集。全量实验必须显式传入官方训练
+CSV 和 wav ZIP；这里的 `--subset 500000` 表示 50 万个 enroll/query pair，
+不会像 CTC 那样展开为 100 万条独立音频：
+
+```bash
+python3 -u baseline/train_wavlm.py \
+  --model-id /mnt/workspace/models/wavlm-base-plus \
+  --train-csv train/train_label.csv \
+  --train-zip train/wav.zip \
+  --subset 500000 \
+  --epochs 3 \
+  --bs 128 \
+  --workers 8 \
+  --device cuda \
+  --pos-weight 4.0 \
+  --noise-prob 0.5 \
+  --noise-dir noise/DEMAND_16k/wav \
+  --out baseline/checkpoints/wavlm_matcher_full_e3.pt
+```
+
+`--out` 保存 Dev Mean 最佳模型，默认派生出的
+`wavlm_matcher_full_e3.last.pt` 每轮保存最新完整训练状态。中断后把目标总轮数
+设大，并增加：
+
+```bash
+--resume baseline/checkpoints/wavlm_matcher_full_e3.last.pt
+```
+
+checkpoint 会校验模型、投影维度、数据路径、pair 数、batch size、学习率、
+`pos_weight` 和噪声参数，防止恢复到不兼容的实验。
+
 ## 字符 CTC：使用注册文本处理 unseen
 
 字符 CTC 使用训练集提供的音频文本监督，推理时只读取测试提供的

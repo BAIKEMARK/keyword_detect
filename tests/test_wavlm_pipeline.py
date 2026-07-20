@@ -15,11 +15,57 @@ sys.path.insert(0, str(ROOT / "baseline"))
 from config import AudioConfig  # noqa: E402
 from data import (WavePairDataset, collate_wave_pairs, normalize_waveform,
                   truncate_waveform)  # noqa: E402
+from train_wavlm import (default_last_checkpoint_path, parse_args,  # noqa: E402
+                         training_config, validate_resume_checkpoint)
 from wavlm_model import SymmetricFrameMatchHead  # noqa: E402
 from wavlm_model import FrozenWavLMMatcher  # noqa: E402
 
 
 class WaveDataTest(unittest.TestCase):
+    def test_training_cli_supports_full_data_and_resume(self):
+        args = parse_args([
+            "--train-zip", "train/wav.zip",
+            "--train-csv", "train/train_label.csv",
+            "--subset", "500000",
+            "--resume", "checkpoint.pt",
+            "--last-out", "latest.pt",
+        ])
+        self.assertEqual(args.train_zip, "train/wav.zip")
+        self.assertEqual(args.train_csv, "train/train_label.csv")
+        self.assertEqual(args.subset, 500000)
+        self.assertEqual(args.resume, "checkpoint.pt")
+        self.assertEqual(args.last_out, "latest.pt")
+
+    def test_resume_checkpoint_paths_and_compatibility(self):
+        self.assertEqual(
+            default_last_checkpoint_path("checkpoints/model.pt"),
+            "checkpoints/model.last.pt")
+
+        args = parse_args([
+            "--model-id", "local/wavlm",
+            "--train-zip", "train/wav.zip",
+            "--train-csv", "train/train_label.csv",
+            "--subset", "500000",
+            "--bs", "128",
+        ])
+        args.workers = 0
+        config = training_config(
+            args, max_samples=40000, train_pairs=500000,
+            amp_enabled=False, device=torch.device("cpu"))
+        legacy_checkpoint = {
+            "model_id": "local/wavlm",
+            "projection_dim": 128,
+            "max_samples": 40000,
+            "pos_weight": 4.0,
+        }
+        validate_resume_checkpoint(legacy_checkpoint, config)
+
+        new_checkpoint = dict(legacy_checkpoint)
+        new_checkpoint["training_config"] = dict(config)
+        new_checkpoint["training_config"]["batch_size"] = 256
+        with self.assertRaisesRegex(ValueError, "batch_size"):
+            validate_resume_checkpoint(new_checkpoint, config)
+
     def test_truncate_waveform(self):
         waveform = np.arange(12, dtype=np.float32)
         result = truncate_waveform(waveform, max_samples=8)
