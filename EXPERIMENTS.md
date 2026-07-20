@@ -1,6 +1,6 @@
 # 实验记录
 
-最近更新：2026-07-19
+最近更新：2026-07-20
 
 ## 记录约定
 
@@ -22,22 +22,26 @@
 | E004 | 当前主模型 | 冻结 WavLM Base+ 字符 CTC | 100,000 utterance | 0.8104 | 0.8117 | 0.8111 | **0.81103** | 10 | `baseline/checkpoints/wavlm_char_ctc_100k_e10.pt` | `418add6` |
 | E005 | 已完成 | 冻结 WavLM Base+ 音素 CTC | 100,000 utterance | 0.8392 | 0.8419 | 0.8406 | **0.83939** | 8 | `baseline/checkpoints/wavlm_phoneme_ctc_100k_e10.pt` | `2d40979` |
 | E006 | 已完成 | 字符 + 音素 CTC 秩融合 | 100,000 utterance 两分支 | 0.8362 | 0.8375 | 0.8369 | **0.84202** | - | 字符 E004 + 音素 E005 | `7f2d962` |
-| E007 | 当前最佳 | 全量冻结 WavLM Base+ 音素 CTC | 1,000,000 utterance | 0.8421 | 0.8444 | 0.8433 | **0.84335** | 2 | `baseline/checkpoints/wavlm_phoneme_ctc_full_e3.pt` | `1303514` |
+| E007 | 已完成 | 全量冻结 WavLM Base+ 音素 CTC | 1,000,000 utterance | 0.8421 | 0.8444 | 0.8433 | **0.84335** | 2 | `baseline/checkpoints/wavlm_phoneme_ctc_full_e3.pt` | `1303514` |
 | E008 | 已完成，不提交 | 音素 CTC 20 epoch，batch size 300 | 100,000 utterance | 0.8368 | 0.8389 | 0.8378 | - | 20 | `baseline/checkpoints/wavlm_phoneme_ctc_100k_e20.pt` | `2d40979` |
-| E009 | 已完成，待线上验证 | 全量冻结 WavLM Base+ 音素 CTC，从零训练 10 epoch，batch size 256 | 1,000,000 utterance | 0.8408 | 0.8456 | 0.8432 | - | 8 | `baseline/checkpoints/wavlm_phoneme_ctc_full_scratch_e10.pt` | `9b735c1` |
+| E009 | 当前线上最佳 | 全量冻结 WavLM Base+ 音素 CTC，从零训练 10 epoch，batch size 256 | 1,000,000 utterance | 0.8408 | 0.8456 | 0.8432 | **0.84446** | 8 | `baseline/checkpoints/wavlm_phoneme_ctc_full_scratch_e10.pt` | `9b735c1` |
+| E010 | 已完成，不采用 | E007 旧 checkpoint 兼容续训，batch size 128，optimizer/scaler 重建 | 1,000,000 utterance | 0.8443 | 0.8460 | 0.8451 | **0.84074** | 4 | `baseline/checkpoints/wavlm_phoneme_ctc_full_e3.pt` | `9b735c1` |
+| E011 | 代码就绪，待训练 | 全量冻结 WavLM Base+ 帧级音频匹配 | 500,000 pair | - | - | - | - | - | `baseline/checkpoints/wavlm_matcher_full_e3.pt` | `14db8ae` |
 
 ## 线上提交记录
 
-以下表格按比赛平台返回结果原样记录，当前最高分为 `0.84335`。
+以下表格按比赛平台返回结果原样记录，当前最高分为 `0.84446`。
 
 | ID | 状态 | 评分 | 提交文件名 | 提交者 | 提交时间 |
 |---:|---|---:|---|---|---|
-| 1 | 返回分数 | **0.84335** | `submission_wavlm_phoneme_ctc_full_epoch2.csv` | Mark | 2026-07-18 23:13:29 |
-| 2 | 返回分数 | 0.84202 | `submission_wavlm_ctc_rank_fusion.csv` | Mark | 2026-07-18 09:04:18 |
-| 3 | 返回分数 | 0.83939 | `submission_wavlm_phoneme_ctc_100k.csv` | Mark | 2026-07-17 23:11:50 |
-| 4 | 返回分数 | 0.81103 | `submission_wavlm_char_ctc_100k.csv` | Mark | 2026-07-17 19:42:00 |
-| 5 | 返回分数 | 0.65978 | `submission_frame_noise_50k.csv` | Mark | 2026-07-13 20:20:18 |
-| 6 | 返回分数 | 0.62547 | `submission.csv` | Mark | 2026-07-11 20:38:53 |
+| 1 | 返回分数 | **0.84446** | `submission_wavlm_phoneme_ctc_full_scratch_epoch8.csv` | Mark | 2026-07-20 22:36:13 |
+| 2 | 返回分数 | 0.84074 | `submission_wavlm_phoneme_ctc_full_epoch4.csv` | Mark | 2026-07-20 12:04:42 |
+| 3 | 返回分数 | 0.84335 | `submission_wavlm_phoneme_ctc_full_epoch2.csv` | Mark | 2026-07-18 23:13:29 |
+| 4 | 返回分数 | 0.84202 | `submission_wavlm_ctc_rank_fusion.csv` | Mark | 2026-07-18 09:04:18 |
+| 5 | 返回分数 | 0.83939 | `submission_wavlm_phoneme_ctc_100k.csv` | Mark | 2026-07-17 23:11:50 |
+| 6 | 返回分数 | 0.81103 | `submission_wavlm_char_ctc_100k.csv` | Mark | 2026-07-17 19:42:00 |
+| 7 | 返回分数 | 0.65978 | `submission_frame_noise_50k.csv` | Mark | 2026-07-13 20:20:18 |
+| 8 | 返回分数 | 0.62547 | `submission.csv` | Mark | 2026-07-11 20:38:53 |
 
 ## E001：帧级 CNN，padding mask 修复前
 
@@ -198,13 +202,19 @@ python3 baseline/train_wavlm_ctc.py \
 checkpoint 未保存 batch size，不能作为绝对证明。后续 checkpoint 必须记录完整
 训练配置和优化器状态。
 
-当前决定：按 batch size 128 从 epoch 2 checkpoint 继续到目标 epoch 5。旧文件
-缺少 optimizer 和 AMP scaler，因此首次续训会恢复模型头和历史最佳指标，并重建
-optimizer/scaler；之后每轮生成的 `.last.pt` 包含完整训练状态，可继续无损恢复。
+后续按 batch size 128 从 epoch 2 checkpoint 继续到 epoch 5。旧文件缺少
+optimizer 和 AMP scaler，因此兼容续训恢复模型头和历史最佳指标，并重建
+optimizer/scaler。该续训对应 E010，线上结果低于 epoch 2，不再采用。
 
 本次断点续训改造后，checkpoint 同时记录 batch size、学习率、数据路径、训练
 utterance 数、增强参数、目标轮数、optimizer、AMP scaler、随机数状态和
 best/current epoch 指标。`--out` 保留最佳模型，`.last.pt` 保留最近完整 epoch。
+
+## E008：100K 音素 CTC 20 epoch
+
+该实验使用 batch size 300，20轮最佳为 epoch 20：seen `0.8368`、unseen
+`0.8389`、mean `0.8378`。由于原10轮 E005 使用 batch size 128，两者不是只改变
+epoch 的严格对照。该模型低于 E005，不提交。
 
 ## E009：全量音素 CTC 从零训练 10 epoch
 
@@ -230,15 +240,50 @@ Dev 结果：
 | 9 | 0.8399 | 0.8437 | 0.8418 |
 | 10 | 0.8410 | 0.8449 | 0.8430 |
 
-结论：从零训练的最佳 Dev Mean 为 `0.8432`，低于 E007 续训得到的 `0.8451`，
-暂不替换当前最佳模型。`full_scratch_e10.pt` 保存的是最佳 epoch 8，
-`full_scratch_e10.last.pt` 保存的是最后 epoch 10。
+结论：从零训练的最佳 Dev Mean 为 `0.8432`。虽然低于 E010 的 dev `0.8451`，
+线上却得到当前最佳 **`0.84446`**。`full_scratch_e10.pt` 保存的是最佳 epoch 8，
+`full_scratch_e10.last.pt` 保存的是最后 epoch 10。这说明千分位 dev 差异不足以
+稳定预测线上排序，不能继续只按单次 dev 最优值判断模型。
 
-## E008：100K 音素 CTC 20 epoch
+## E010：旧 checkpoint 兼容续训到 epoch 5
 
-该实验使用 batch size 300，20轮最佳为 epoch 20：seen `0.8368`、unseen
-`0.8389`、mean `0.8378`。由于原10轮 E005 使用 batch size 128，两者不是只改变
-epoch 的严格对照。该模型低于 E005，不提交。
+- batch size 128，从 E007 已完成的 epoch 2 开始
+- 旧 checkpoint 没有 optimizer/scaler，续训时两者从头初始化
+- epoch 3：seen `0.8442`，unseen `0.8459`，mean `0.8451`
+- epoch 4：seen `0.8443`，unseen `0.8460`，mean `0.8451`
+- epoch 5：seen `0.8434`，unseen `0.8443`，mean `0.8439`
+- epoch 4 线上得分：`0.84074`
+
+结论：该实验 dev 高于 E007/E009，但线上明显更低。旧模型头配合全新 optimizer
+继续训练改变了原有优化轨迹，不属于无损续训；该 checkpoint 不再用于最终方案。
+
+## E011：全量 WavLM 帧级音频匹配
+
+commit `14db8ae` 已让 `train_wavlm.py` 支持显式传入全量 `train_csv`、
+`train_zip` 和 500,000 pair，并加入最佳/最新 checkpoint 与断点续训。模型仍使用
+既有的冻结 WavLM Base+ 帧级特征、对称 max-mean 和自研二分类头。
+
+这表示“全量帧级音频匹配”的训练代码已经就绪，但实验尚未运行，也尚未加入
+难负样本、CTC 分数融合或监督式融合头。因此不能把 `14db8ae` 记作该路线已经
+验证有效，只能记作基础训练能力完成。
+
+## 线上收益拆解
+
+| 改动 | 对照 | 线上变化 | 判断 |
+|---|---|---:|---|
+| 帧级 CNN + DEMAND + 15 epoch | 官方 baseline | `+0.03431` | 多项基础优化的合计收益，无法拆开归因 |
+| WavLM + 注册文本字符 CTC | 增强 CNN | **`+0.15125`** | 最大单步收益，来自强底模、文本先验和任务重构的组合 |
+| 字符改为音素 CTC | 100K 字符 CTC | **`+0.02836`** | 最清晰的单因素大收益，证明音素监督更匹配任务 |
+| 字符/音素秩融合 | 100K 音素 CTC | `+0.00263` | 有互补性，但属于千分位收益 |
+| 全量数据 epoch 2 | 100K 音素 CTC | `+0.00396` | 全量数据有效，但边际收益远小于模型/目标变化 |
+| 全量从零 epoch 8 | 100K 音素 CTC | `+0.00507` | 当前最佳，包含数据量、batch 和完整优化轨迹差异 |
+| 全量从零 epoch 8 | 全量 epoch 2 | `+0.00111` | 更多训练仅有千分位提升 |
+| 旧 checkpoint 兼容续训 epoch 4 | 全量 epoch 2 | `-0.00261` | dev 上升但线上下降，重建 optimizer 的续训不可靠 |
+
+从官方 baseline `0.62547` 到当前最佳 `0.84446`，累计绝对提升为
+**`0.21899`**。收益主次已经明确：任务重构/强底模远大于音素监督，音素监督
+远大于数据扩容、分数融合和增加 epoch。下一阶段应优先验证新判别信息来源
+（注册音频分支、难负样本、监督融合）或更强底模，而不是继续增加 CTC 轮数。
 
 ## 后续记录模板
 
