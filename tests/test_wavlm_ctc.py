@@ -27,7 +27,8 @@ from train_wavlm_ctc import (ctc_valid_mask,  # noqa: E402
                              default_last_checkpoint_path, parse_args,
                              training_config,
                              validate_resume_checkpoint)
-from wavlm_ctc_model import FrozenWavLMCTC  # noqa: E402
+from wavlm_ctc_model import (FrozenWavLMCTC, TemporalCTCHead,  # noqa: E402
+                             checkpoint_head_config)
 
 
 class CharacterVocabularyTest(unittest.TestCase):
@@ -178,12 +179,18 @@ class CTCDataTest(unittest.TestCase):
         args = parse_args([
             "--train-zip", "train/wav.zip",
             "--train-csv", "train/train_label.csv",
+            "--head", "temporal",
+            "--adapter-dim", "192",
+            "--adapter-layers", "3",
             "--resume", "checkpoint.pt",
             "--last-out", "latest.pt",
         ])
         self.assertEqual(args.train_zip, "train/wav.zip")
         self.assertEqual(args.train_csv, "train/train_label.csv")
         self.assertIsNone(args.subset)
+        self.assertEqual(args.head, "temporal")
+        self.assertEqual(args.adapter_dim, 192)
+        self.assertEqual(args.adapter_layers, 3)
         self.assertEqual(args.resume, "checkpoint.pt")
         self.assertEqual(args.last_out, "latest.pt")
 
@@ -227,6 +234,18 @@ class CTCDataTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "batch_size"):
             validate_resume_checkpoint(
                 new_checkpoint, config, vocabulary)
+
+    def test_old_checkpoint_defaults_to_linear_head(self):
+        self.assertEqual(checkpoint_head_config({}), {
+            "head_type": "linear",
+            "adapter_dim": 256,
+            "adapter_layers": 2,
+        })
+        self.assertEqual(checkpoint_head_config({
+            "head_type": "temporal",
+            "adapter_dim": 128,
+            "adapter_layers": 1,
+        })["head_type"], "temporal")
 
 
 class CTCScoreTest(unittest.TestCase):
@@ -304,6 +323,30 @@ class CTCScoreTest(unittest.TestCase):
             [row[1] for row in rows], expected.numpy(), rtol=1e-6)
 
 
+class TemporalCTCHeadTest(unittest.TestCase):
+    def test_padding_is_masked_and_all_parameters_receive_gradients(self):
+        torch.manual_seed(37)
+        head = TemporalCTCHead(
+            hidden_size=8, num_hidden_states=3, vocab_size=5,
+            adapter_dim=6, adapter_layers=2, dropout=0.0)
+        hidden = tuple(torch.randn(2, 7, 8) for _ in range(3))
+        lengths = torch.tensor([7, 4])
+        changed = [layer.clone() for layer in hidden]
+        for layer in changed:
+            layer[1, 4:] = 1000.0
+
+        expected = head(hidden, lengths)
+        actual = head(tuple(changed), lengths)
+        torch.testing.assert_close(actual[1, :4], expected[1, :4])
+        torch.testing.assert_close(actual[1, 4:], torch.zeros_like(actual[1, 4:]))
+
+        actual.sum().backward()
+        for name, parameter in head.named_parameters():
+            with self.subTest(parameter=name):
+                self.assertIsNotNone(parameter.grad)
+                self.assertTrue(torch.isfinite(parameter.grad).all())
+
+
 class FrozenWavLMCTCTest(unittest.TestCase):
     def test_fake_backbone_forward_freeze_and_head_state(self):
         class FakeBackbone(torch.nn.Module):
@@ -335,6 +378,9 @@ class FrozenWavLMCTCTest(unittest.TestCase):
         transformers.AutoModel = FakeAutoModel
         with mock.patch.dict(sys.modules, {"transformers": transformers}):
             model = FrozenWavLMCTC(28, "fake/wavlm", dropout=0.0)
+            temporal_model = FrozenWavLMCTC(
+                28, "fake/wavlm", dropout=0.0, head_type="temporal",
+                adapter_dim=6, adapter_layers=1)
 
         model.train()
         self.assertFalse(model.backbone.training)
@@ -349,6 +395,11 @@ class FrozenWavLMCTCTest(unittest.TestCase):
                             for parameter in model.head.parameters()))
         self.assertTrue(all(not key.startswith("backbone.")
                             for key in model.head_state_dict()))
+
+        temporal_log_probs, temporal_lengths = temporal_model.log_probs(
+            waveforms, lengths)
+        self.assertEqual(temporal_log_probs.shape, (2, 6, 28))
+        torch.testing.assert_close(temporal_lengths, torch.tensor([6, 4]))
 
 
 if __name__ == "__main__":

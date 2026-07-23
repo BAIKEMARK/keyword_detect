@@ -16,7 +16,8 @@ from config import AudioConfig  # noqa: E402
 from data import (WavePairDataset, collate_wave_pairs, normalize_waveform,
                   truncate_waveform)  # noqa: E402
 from train_wavlm import (default_last_checkpoint_path, parse_args,  # noqa: E402
-                         training_config, validate_resume_checkpoint)
+                         resume_position, training_config,
+                         validate_resume_checkpoint)
 from wavlm_model import SymmetricFrameMatchHead  # noqa: E402
 from wavlm_model import FrozenWavLMMatcher  # noqa: E402
 
@@ -27,12 +28,14 @@ class WaveDataTest(unittest.TestCase):
             "--train-zip", "train/wav.zip",
             "--train-csv", "train/train_label.csv",
             "--subset", "500000",
+            "--eval-bs", "24",
             "--resume", "checkpoint.pt",
             "--last-out", "latest.pt",
         ])
         self.assertEqual(args.train_zip, "train/wav.zip")
         self.assertEqual(args.train_csv, "train/train_label.csv")
         self.assertEqual(args.subset, 500000)
+        self.assertEqual(args.eval_bs, 24)
         self.assertEqual(args.resume, "checkpoint.pt")
         self.assertEqual(args.last_out, "latest.pt")
 
@@ -65,6 +68,13 @@ class WaveDataTest(unittest.TestCase):
         new_checkpoint["training_config"]["batch_size"] = 256
         with self.assertRaisesRegex(ValueError, "batch_size"):
             validate_resume_checkpoint(new_checkpoint, config)
+
+    def test_pending_evaluation_resumes_without_retraining_epoch(self):
+        self.assertEqual(
+            resume_position({"epoch": 2}), (2, 3, False))
+        self.assertEqual(
+            resume_position({"epoch": 2, "evaluation_pending": True}),
+            (2, 2, True))
 
     def test_truncate_waveform(self):
         waveform = np.arange(12, dtype=np.float32)

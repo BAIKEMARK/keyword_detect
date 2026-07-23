@@ -124,7 +124,8 @@ python3 -u baseline/train_wavlm.py \
   --train-zip train/wav.zip \
   --subset 500000 \
   --epochs 3 \
-  --bs 128 \
+  --bs 64 \
+  --eval-bs 16 \
   --workers 8 \
   --device cuda \
   --pos-weight 4.0 \
@@ -143,6 +144,71 @@ python3 -u baseline/train_wavlm.py \
 
 checkpoint 会校验模型、投影维度、数据路径、pair 数、batch size、学习率、
 `pos_weight` 和噪声参数，防止恢复到不兼容的实验。
+
+训练和 dev 使用独立 batch size。每轮训练结束后会先把
+`evaluation_pending=true` 的状态写入 `.last.pt`；如果 dev OOM，从该文件恢复时
+只重新运行尚未完成的评估，不会重复训练整个 epoch。当前阶段不要直接运行上面的
+全量命令，先用 `--subset 50000` 做路线筛选。
+
+## Temporal CTC Adapter 小规模实验
+
+默认 `--head linear` 与现有 checkpoint 完全兼容。时序实验在冻结 encoder 后增加
+带 padding mask 的轻量卷积 Adapter，只使用 10 万 utterance 横测：
+
+```bash
+export NLTK_DATA=/mnt/workspace/nltk_data
+
+python3 -u baseline/train_wavlm_ctc.py \
+  --model-id /mnt/workspace/models/wavlm-base-plus \
+  --units phoneme \
+  --head temporal \
+  --adapter-dim 256 \
+  --adapter-layers 2 \
+  --subset 100000 \
+  --epochs 3 \
+  --bs 128 \
+  --workers 8 \
+  --device cuda \
+  --noise-prob 0.5 \
+  --noise-dir noise/DEMAND_16k/wav \
+  --out baseline/checkpoints/wavlm_base_plus_phoneme_temporal_100k_e3.pt
+```
+
+训练、dev 分数导出和 eval 推理会从 checkpoint 自动识别 `linear/temporal`，无需
+向推理命令重复传 Adapter 参数。
+
+## 下载 Large 语音底模到持久化目录
+
+服务器使用 ModelScope 下载，默认写入 `/mnt/workspace/models`：
+
+```bash
+python3 -m pip install -U modelscope
+
+bash scripts/download_speech_backbones.sh all
+```
+
+也可以单独下载：
+
+```bash
+bash scripts/download_speech_backbones.sh wavlm-large
+bash scripts/download_speech_backbones.sh hubert-large
+```
+
+对应本地路径：
+
+```text
+/mnt/workspace/models/wavlm-large
+/mnt/workspace/models/hubert-large-ll60k
+```
+
+下载完成后可开启离线模式：
+
+```bash
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+```
+
+Large 模型只用于后续 10 万 utterance 横测，当前不启动全量训练。
 
 ## 字符 CTC：使用注册文本处理 unseen
 

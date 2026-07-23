@@ -24,6 +24,10 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-id", default="microsoft/wavlm-base-plus")
     parser.add_argument("--units", choices=("char", "phoneme"), default="char")
+    parser.add_argument(
+        "--head", choices=("linear", "temporal"), default="linear")
+    parser.add_argument("--adapter-dim", type=int, default=256)
+    parser.add_argument("--adapter-layers", type=int, default=2)
     parser.add_argument("--train-zip", default=PATHS.train_zip)
     parser.add_argument("--train-csv", default=PATHS.train_csv)
     parser.add_argument("--max-seconds", type=float, default=2.5)
@@ -118,6 +122,9 @@ def training_config(args, max_samples, train_utterances, amp_enabled, device):
     return {
         "model_id": args.model_id,
         "units": args.units,
+        "head_type": args.head,
+        "adapter_dim": args.adapter_dim,
+        "adapter_layers": args.adapter_layers,
         "train_csv": args.train_csv,
         "train_zip": args.train_zip,
         "train_utterances": train_utterances,
@@ -147,7 +154,8 @@ def validate_resume_checkpoint(checkpoint, config, vocabulary):
     expected["vocabulary"] = tuple(vocabulary.symbols)
     path_keys = {"train_csv", "train_zip", "noise_dir"}
     checked_keys = (
-        "model_id", "units", "vocabulary", "train_csv", "train_zip",
+        "model_id", "units", "head_type", "adapter_dim", "adapter_layers",
+        "vocabulary", "train_csv", "train_zip",
         "train_utterances", "max_samples", "dropout", "batch_size",
         "learning_rate", "noise_prob", "noise_snr_min", "noise_snr_max",
         "noise_dir", "seed",
@@ -211,6 +219,9 @@ def checkpoint_state(model, optimizer, scaler, config, vocabulary, device,
         "training_config": config,
         "model_id": config["model_id"],
         "units": config["units"],
+        "head_type": config["head_type"],
+        "adapter_dim": config["adapter_dim"],
+        "adapter_layers": config["adapter_layers"],
         "vocabulary": vocabulary.symbols,
         "train_csv": config["train_csv"],
         "train_zip": config["train_zip"],
@@ -271,6 +282,8 @@ def main():
     max_samples = int(round(args.max_seconds * AUDIO.sample_rate))
     if max_samples <= 0:
         raise ValueError("--max-seconds must be positive")
+    if args.adapter_dim <= 0 or args.adapter_layers <= 0:
+        raise ValueError("--adapter-dim and --adapter-layers must be positive")
 
     for description, path in (
             ("training CSV", args.train_csv),
@@ -300,6 +313,10 @@ def main():
     print(f"workers: {args.workers}", flush=True)
     print(f"model: {args.model_id} (frozen)", flush=True)
     print(f"units: {args.units}", flush=True)
+    print(f"head: {args.head}", flush=True)
+    if args.head == "temporal":
+        print(f"adapter: dim={args.adapter_dim} layers={args.adapter_layers}",
+              flush=True)
     print(f"train csv: {args.train_csv}", flush=True)
     print(f"train wav: {args.train_zip}", flush=True)
     print(f"vocabulary: {len(vocabulary)} classes", flush=True)
@@ -361,7 +378,11 @@ def main():
         args.workers, device, vocabulary)
 
     model = FrozenWavLMCTC(
-        len(vocabulary), args.model_id, args.dropout).to(device)
+        len(vocabulary), args.model_id, args.dropout,
+        head_type=args.head,
+        adapter_dim=args.adapter_dim,
+        adapter_layers=args.adapter_layers,
+    ).to(device)
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     frozen = sum(p.numel() for p in model.parameters() if not p.requires_grad)
     print(f"params: trainable={trainable:,} frozen={frozen:,}", flush=True)

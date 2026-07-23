@@ -25,6 +25,9 @@ def parse_args(argv=None):
     ap.add_argument("--max-seconds", type=float, default=2.5)
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--bs", type=int, default=16)
+    ap.add_argument(
+        "--eval-bs", type=int, default=32,
+        help="dev batch size; independent from the training batch size")
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--pos-weight", type=float, default=TRAIN.pos_weight)
     ap.add_argument("--subset", type=int, default=50000)
@@ -106,6 +109,7 @@ def training_config(args, max_samples, train_pairs, amp_enabled, device):
         "train_pairs": train_pairs,
         "max_samples": max_samples,
         "batch_size": args.bs,
+        "eval_batch_size": args.eval_bs,
         "learning_rate": args.lr,
         "pos_weight": args.pos_weight,
         "noise_prob": args.noise_prob,
@@ -179,7 +183,8 @@ def atomic_torch_save(state, path):
 
 
 def checkpoint_state(model, optimizer, scaler, config, device, epoch,
-                     seen_auc, unseen_auc, mean_auc, best_auc, best_epoch):
+                     seen_auc, unseen_auc, mean_auc, best_auc, best_epoch,
+                     evaluation_pending=False):
     return {
         "format_version": 2,
         "head": model.head_state_dict(),
@@ -194,6 +199,7 @@ def checkpoint_state(model, optimizer, scaler, config, device, epoch,
         "train_pairs": config["train_pairs"],
         "max_samples": config["max_samples"],
         "batch_size": config["batch_size"],
+        "eval_batch_size": config["eval_batch_size"],
         "learning_rate": config["learning_rate"],
         "pos_weight": config["pos_weight"],
         "noise_prob": config["noise_prob"],
@@ -206,7 +212,15 @@ def checkpoint_state(model, optimizer, scaler, config, device, epoch,
         "best_auc": best_auc,
         "best_epoch": best_epoch,
         "epoch": epoch,
+        "evaluation_pending": evaluation_pending,
     }
+
+
+def resume_position(checkpoint):
+    completed_epoch = int(checkpoint.get("epoch", 0))
+    evaluation_pending = bool(checkpoint.get("evaluation_pending", False))
+    start_epoch = completed_epoch if evaluation_pending else completed_epoch + 1
+    return completed_epoch, start_epoch, evaluation_pending
 
 
 @torch.no_grad()
@@ -237,6 +251,8 @@ def main():
         raise ValueError("--max-seconds must be positive")
     if args.subset <= 0:
         raise ValueError("--subset must be positive")
+    if args.bs <= 0 or args.eval_bs <= 0:
+        raise ValueError("--bs and --eval-bs must be positive")
     for description, path in (
             ("training CSV", args.train_csv),
             ("training wav ZIP", args.train_zip)):
@@ -253,6 +269,7 @@ def main():
     print(f"amp: {amp_enabled}", flush=True)
     print(f"epochs: target={args.epochs}", flush=True)
     print(f"batch size: {args.bs}", flush=True)
+    print(f"eval batch size: {args.eval_bs}", flush=True)
     print(f"learning rate: {args.lr}", flush=True)
     print(f"process id: {os.getpid()}", flush=True)
 
@@ -302,10 +319,10 @@ def main():
         device, shuffle=True, augment=augment)
     dev_seen = make_loader(
         load_pairs(PATHS.dev_seen_csv, True), PATHS.dev_seen_zip, max_samples,
-        args.bs, args.workers, device)
+        args.eval_bs, args.workers, device)
     dev_unseen = make_loader(
         load_pairs(PATHS.dev_unseen_csv, True), PATHS.dev_unseen_zip,
-        max_samples, args.bs, args.workers, device)
+        max_samples, args.eval_bs, args.workers, device)
 
     model = FrozenWavLMMatcher(
         args.model_id, projection_dim=args.projection_dim).to(device)
@@ -321,10 +338,11 @@ def main():
     best = -1.0
     best_epoch = 0
     start_epoch = 1
+    pending_evaluation = False
     if resume_checkpoint is not None:
         model.load_head_state_dict(resume_checkpoint["head"])
-        completed_epoch = int(resume_checkpoint.get("epoch", 0))
-        start_epoch = completed_epoch + 1
+        completed_epoch, start_epoch, pending_evaluation = resume_position(
+            resume_checkpoint)
         best = float(resume_checkpoint.get(
             "best_auc", resume_checkpoint.get("auc", -1.0)))
         best_epoch = int(resume_checkpoint.get(
@@ -341,7 +359,8 @@ def main():
                   "using a new scaler", flush=True)
         restore_rng_state(resume_checkpoint.get("rng_state"), device)
         print(f"resumed {args.resume}: completed_epoch={completed_epoch} "
-              f"best={best:.4f} best_epoch={best_epoch}", flush=True)
+              f"best={best:.4f} best_epoch={best_epoch} "
+              f"evaluation_pending={pending_evaluation}", flush=True)
     if args.epochs < start_epoch:
         raise ValueError(
             f"--epochs={args.epochs} is smaller than the next resume epoch "
@@ -349,6 +368,31 @@ def main():
 
     print(f"best checkpoint: {args.out}", flush=True)
     print(f"latest checkpoint: {args.last_out}", flush=True)
+
+    if pending_evaluation:
+        started = time.time()
+        print(f"resuming pending dev evaluation for epoch {start_epoch}",
+              flush=True)
+        seen_auc = evaluate(model, dev_seen, device, amp_enabled)
+        unseen_auc = evaluate(model, dev_unseen, device, amp_enabled)
+        mean_auc = 0.5 * (seen_auc + unseen_auc)
+        print(f"[epoch {start_epoch}] seen={seen_auc:.4f} "
+              f"unseen={unseen_auc:.4f} mean={mean_auc:.4f} "
+              f"eval_only_time={time.time() - started:.0f}s", flush=True)
+        improved = mean_auc > best
+        if improved:
+            best = mean_auc
+            best_epoch = start_epoch
+        state = checkpoint_state(
+            model, optimizer, scaler, config, device, start_epoch,
+            seen_auc, unseen_auc, mean_auc, best, best_epoch)
+        atomic_torch_save(state, args.last_out)
+        print(f"  saved latest -> {args.last_out}", flush=True)
+        if improved:
+            atomic_torch_save(state, args.out)
+            print(f"  saved best -> {args.out}", flush=True)
+        start_epoch += 1
+
     for epoch in range(start_epoch, args.epochs + 1):
         model.train()
         started = time.time()
@@ -371,6 +415,12 @@ def main():
             if iteration % args.log_every == 0:
                 print(f"  ep{epoch} {iteration}/{len(train_loader)} "
                       f"loss={loss_sum/iteration:.4f}", flush=True)
+
+        pending_state = checkpoint_state(
+            model, optimizer, scaler, config, device, epoch,
+            None, None, None, best, best_epoch, evaluation_pending=True)
+        atomic_torch_save(pending_state, args.last_out)
+        print(f"  saved pre-eval -> {args.last_out}", flush=True)
 
         seen_auc = evaluate(model, dev_seen, device, amp_enabled)
         unseen_auc = evaluate(model, dev_unseen, device, amp_enabled)

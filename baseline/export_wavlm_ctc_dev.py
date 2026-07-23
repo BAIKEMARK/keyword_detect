@@ -14,7 +14,7 @@ from ctc_text import build_vocabulary, checkpoint_units, warm_vocabulary
 from infer_wavlm_ctc import collect_scores
 from runtime import select_device
 from train_wavlm_ctc import make_score_loader
-from wavlm_ctc_model import FrozenWavLMCTC
+from wavlm_ctc_model import FrozenWavLMCTC, checkpoint_head_config
 
 
 def parse_args():
@@ -63,13 +63,16 @@ def main():
         raise ValueError("checkpoint CTC vocabulary does not match code")
 
     model_id = args.model_id or checkpoint["model_id"]
+    head_config = checkpoint_head_config(checkpoint)
     model = FrozenWavLMCTC(
-        len(vocabulary), model_id, checkpoint["dropout"]).to(device)
+        len(vocabulary), model_id, checkpoint["dropout"],
+        **head_config).to(device)
     model.load_head_state_dict(checkpoint["head"])
     print(f"device: {device}")
     print(f"workers: {args.workers}")
     print(f"model: {model_id} (frozen)")
     print(f"units: {units}")
+    print(f"head: {head_config['head_type']}")
     print(f"loaded {args.ckpt} (dev mean AUC={checkpoint.get('auc')})")
 
     seen_loader = make_score_loader(
