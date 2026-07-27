@@ -28,7 +28,7 @@
 | E010 | 已完成，不采用 | E007 旧 checkpoint 兼容续训，batch size 128，optimizer/scaler 重建 | 1,000,000 utterance | 0.8443 | 0.8460 | 0.8451 | **0.84074** | 4 | `baseline/checkpoints/wavlm_phoneme_ctc_full_e3.pt` | `9b735c1` |
 | E011 | 代码就绪，待训练 | 全量冻结 WavLM Base+ 帧级音频匹配 | 500,000 pair | - | - | - | - | - | `baseline/checkpoints/wavlm_matcher_full_e3.pt` | `14db8ae` |
 | E012 | 已完成 | 冻结 WavLM Base+ 音素 CTC + Temporal Adapter，batch size 128 | 100,000 utterance | 0.8725 | 0.8723 | **0.8724** | **0.86944** | 3 | `baseline/checkpoints/wavlm_base_plus_phoneme_temporal_100k_e3.pt` | `7fc28b7` |
-| E013 | 当前线上最佳，Dev 待补 | 冻结 WavLM Base+ 音素 CTC + Temporal Adapter，batch size 256，15 epoch | 100,000 utterance | - | - | - | **0.87676** | - | `baseline/checkpoints/wavlm_base_plus_phoneme_temporal_100k_bs256_e15.pt` | `7fc28b7` |
+| E013 | 当前线上最佳 | 冻结 WavLM Base+ 音素 CTC + Temporal Adapter，batch size 256，15 epoch | 100,000 utterance | 0.8773 | 0.8710 | **0.8742** | **0.87676** | 13 | `baseline/checkpoints/wavlm_base_plus_phoneme_temporal_100k_bs256_e15.pt` | `7fc28b7` |
 
 ## 线上提交记录
 
@@ -301,10 +301,32 @@ Dev 结果：
 `baseline/checkpoints/wavlm_base_plus_phoneme_temporal_100k_bs256_e15.pt`，
 提交文件为 `submission_wavlm_base_plus_phoneme_temporal_100k_bs256_e15.csv`。
 
+Dev 结果：
+
+| Epoch | Seen | Unseen | Mean |
+|---:|---:|---:|---:|
+| 1 | 0.8513 | 0.8504 | 0.8508 |
+| 2 | 0.8578 | 0.8492 | 0.8535 |
+| 3 | 0.8608 | 0.8606 | 0.8607 |
+| 4 | 0.8655 | 0.8669 | 0.8662 |
+| 5 | 0.8718 | 0.8658 | 0.8688 |
+| 6 | 0.8733 | 0.8661 | 0.8697 |
+| 7 | 0.8738 | 0.8704 | 0.8721 |
+| 8 | 0.8716 | 0.8656 | 0.8686 |
+| 9 | 0.8746 | 0.8664 | 0.8705 |
+| 10 | 0.8754 | 0.8694 | 0.8724 |
+| 11 | 0.8724 | 0.8676 | 0.8700 |
+| 12 | 0.8728 | 0.8687 | 0.8708 |
+| 13 | 0.8773 | 0.8710 | **0.8742** |
+| 14 | 0.8768 | 0.8679 | 0.8724 |
+| 15 | 0.8763 | 0.8700 | 0.8732 |
+
 线上得分 **`0.87676`**，比 E012 提升 `0.00732`，比此前全量线性 CTC 最佳
 E009 提升 `0.03230`。由于该实验同时改变了 batch size 和训练轮数，不能把收益
-单独归因于增加 epoch。逐 epoch Dev 结果和 checkpoint 对应的最佳 epoch 尚未从
-服务器日志补录。
+单独归因于增加 epoch。最佳 checkpoint 来自 epoch 13；其 Dev Mean 仅比 E012
+高 `0.0018`，但线上高 `0.00732`。此外，batch size 256 的 epoch 3 Dev Mean
+`0.8607` 低于 E012 使用 batch size 128 的 `0.8724`，说明更大的 batch 本身没有
+带来早期收益，而是需要更多 epoch 才能补足较少的参数更新次数。
 
 ## 线上收益拆解
 
