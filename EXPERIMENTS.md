@@ -29,6 +29,7 @@
 | E011 | 代码就绪，待训练 | 全量冻结 WavLM Base+ 帧级音频匹配 | 500,000 pair | - | - | - | - | - | `baseline/checkpoints/wavlm_matcher_full_e3.pt` | `14db8ae` |
 | E012 | 已完成 | 冻结 WavLM Base+ 音素 CTC + Temporal Adapter，batch size 128 | 100,000 utterance | 0.8725 | 0.8723 | **0.8724** | **0.86944** | 3 | `baseline/checkpoints/wavlm_base_plus_phoneme_temporal_100k_e3.pt` | `7fc28b7` |
 | E013 | 当前线上最佳 | 冻结 WavLM Base+ 音素 CTC + Temporal Adapter，batch size 256，15 epoch | 100,000 utterance | 0.8773 | 0.8710 | **0.8742** | **0.87676** | 13 | `baseline/checkpoints/wavlm_base_plus_phoneme_temporal_100k_bs256_e15.pt` | `7fc28b7` |
+| E014 | 已完成，待线上验证 | 冻结 WavLM Large 音素 CTC + Temporal Adapter，batch size 128 | 100,000 utterance | 0.8893 | 0.8802 | **0.8847** | - | 1 | `baseline/checkpoints/wavlm_large_phoneme_temporal_100k_e3.pt` | `7fc28b7` |
 
 ## 线上提交记录
 
@@ -327,6 +328,24 @@ E009 提升 `0.03230`。由于该实验同时改变了 batch size 和训练轮�
 高 `0.0018`，但线上高 `0.00732`。此外，batch size 256 的 epoch 3 Dev Mean
 `0.8607` 低于 E012 使用 batch size 128 的 `0.8724`，说明更大的 batch 本身没有
 带来早期收益，而是需要更多 epoch 才能补足较少的参数更新次数。
+
+## E014：100K WavLM Large + Temporal Adapter
+
+配置与 E012 保持一致，只将冻结底模从 WavLM Base+ 换为 WavLM Large：100,000
+utterance、batch size 128、3 epoch、两层 dim 256 Temporal Adapter、DEMAND
+概率 0.5、SNR `[-10, 5]` dB。冻结参数 315,453,120，可训练参数 410,433，
+峰值显存 `6.83GB`。
+
+| Epoch | Seen | Unseen | Mean |
+|---:|---:|---:|---:|
+| 1 | 0.8893 | 0.8802 | **0.8847** |
+| 2 | 0.8851 | 0.8828 | 0.8839 |
+| 3 | 0.8861 | 0.8822 | 0.8842 |
+
+最佳 checkpoint 来自 epoch 1。与同配置 Base+ E012 相比，Dev Mean 提升
+`0.0123`；Seen 提升 `0.0168`，Unseen 提升 `0.0079`。训练 loss 在后两轮继续
+下降，但 Dev 未超过第一轮，说明 Large 收敛更快并出现早期过拟合迹象。先进行
+线上验证，不直接扩展到 15 epoch。
 
 ## 线上收益拆解
 
