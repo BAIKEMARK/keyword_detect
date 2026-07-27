@@ -30,7 +30,7 @@
 | E012 | 已完成 | 冻结 WavLM Base+ 音素 CTC + Temporal Adapter，batch size 128 | 100,000 utterance | 0.8725 | 0.8723 | **0.8724** | **0.86944** | 3 | `baseline/checkpoints/wavlm_base_plus_phoneme_temporal_100k_e3.pt` | `7fc28b7` |
 | E013 | 历史线上最佳 | 冻结 WavLM Base+ 音素 CTC + Temporal Adapter，batch size 256，15 epoch | 100,000 utterance | 0.8773 | 0.8710 | **0.8742** | **0.87676** | 13 | `baseline/checkpoints/wavlm_base_plus_phoneme_temporal_100k_bs256_e15.pt` | `7fc28b7` |
 | E014 | 当前线上最佳 | 冻结 WavLM Large 音素 CTC + Temporal Adapter，batch size 128 | 100,000 utterance | 0.8893 | 0.8802 | **0.8847** | **0.88555** | 1 | `baseline/checkpoints/wavlm_large_phoneme_temporal_100k_e3.pt` | `7fc28b7` |
-| E015 | 继续训练中 | 冻结 HuBERT Large 音素 CTC + Temporal Adapter，batch size 128 | 100,000 utterance | 0.8862 | 0.8722 | **0.8792** | - | 3/3 | `baseline/checkpoints/hubert_large_phoneme_temporal_100k_e3.pt` | `7fc28b7` |
+| E015 | 已完成，待线上验证 | 冻结 HuBERT Large 音素 CTC + Temporal Adapter，batch size 128 | 100,000 utterance | 0.8930 | 0.8803 | **0.8866** | - | 10 | `baseline/checkpoints/hubert_large_phoneme_temporal_100k_e3.pt` | `7fc28b7` |
 
 ## 线上提交记录
 
@@ -359,11 +359,25 @@ utterance、batch size 128、3 epoch、两层 dim 256 Temporal Adapter、DEMAND
 |---:|---:|---:|---:|
 | 1 | 0.8596 | 0.8474 | 0.8535 |
 | 2 | 0.8729 | 0.8585 | 0.8657 |
-| 3 | 0.8862 | 0.8722 | **0.8792** |
+| 3 | 0.8862 | 0.8722 | 0.8792 |
+| 4 | 0.8830 | 0.8741 | 0.8786 |
+| 5 | 0.8853 | 0.8786 | 0.8820 |
+| 6 | 0.8837 | 0.8734 | 0.8785 |
+| 7 | 0.8894 | 0.8802 | 0.8848 |
+| 8 | 0.8846 | 0.8740 | 0.8793 |
+| 9 | 0.8884 | 0.8767 | 0.8825 |
+| 10 | 0.8930 | 0.8803 | **0.8866** |
+| 11 | 0.8872 | 0.8754 | 0.8813 |
+| 12 | 0.8901 | 0.8760 | 0.8831 |
+| 13 | 0.8956 | 0.8773 | 0.8864 |
+| 14 | 0.8905 | 0.8785 | 0.8845 |
+| 15 | 0.8931 | 0.8764 | 0.8848 |
 
-前三轮持续快速提升，尚未收敛。当前最佳比 WavLM Large E014 低 `0.0055`，
-但不能据此判定底模更弱；保留 optimizer/scaler 从 `.last.pt` 续训至总 epoch 7，
-再决定是否提交线上。
+从 epoch 3 的 `.last.pt` 保留 optimizer/scaler 续训，日志确认从 epoch 4 开始，
+不是重新训练。最佳 checkpoint 来自 epoch 10，Dev Mean 比 WavLM Large E014
+高 `0.0019`；epoch 13 接近但低 `0.0002`。训练到 epoch 15 后未继续改善，当前
+配置已经进入平台期。使用保存最佳模型的 `.pt` 进行一次线上验证，不使用保存
+epoch 15 的 `.last.pt`。
 
 ## 线上收益拆解
 
