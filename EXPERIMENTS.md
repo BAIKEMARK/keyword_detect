@@ -24,25 +24,28 @@
 | E006 | 已完成 | 字符 + 音素 CTC 秩融合 | 100,000 utterance 两分支 | 0.8362 | 0.8375 | 0.8369 | **0.84202** | - | 字符 E004 + 音素 E005 | `7f2d962` |
 | E007 | 已完成 | 全量冻结 WavLM Base+ 音素 CTC | 1,000,000 utterance | 0.8421 | 0.8444 | 0.8433 | **0.84335** | 2 | `baseline/checkpoints/wavlm_phoneme_ctc_full_e3.pt` | `1303514` |
 | E008 | 已完成，不提交 | 音素 CTC 20 epoch，batch size 300 | 100,000 utterance | 0.8368 | 0.8389 | 0.8378 | - | 20 | `baseline/checkpoints/wavlm_phoneme_ctc_100k_e20.pt` | `2d40979` |
-| E009 | 当前线上最佳 | 全量冻结 WavLM Base+ 音素 CTC，从零训练 10 epoch，batch size 256 | 1,000,000 utterance | 0.8408 | 0.8456 | 0.8432 | **0.84446** | 8 | `baseline/checkpoints/wavlm_phoneme_ctc_full_scratch_e10.pt` | `9b735c1` |
+| E009 | 历史线上最佳 | 全量冻结 WavLM Base+ 音素 CTC，从零训练 10 epoch，batch size 256 | 1,000,000 utterance | 0.8408 | 0.8456 | 0.8432 | **0.84446** | 8 | `baseline/checkpoints/wavlm_phoneme_ctc_full_scratch_e10.pt` | `9b735c1` |
 | E010 | 已完成，不采用 | E007 旧 checkpoint 兼容续训，batch size 128，optimizer/scaler 重建 | 1,000,000 utterance | 0.8443 | 0.8460 | 0.8451 | **0.84074** | 4 | `baseline/checkpoints/wavlm_phoneme_ctc_full_e3.pt` | `9b735c1` |
 | E011 | 代码就绪，待训练 | 全量冻结 WavLM Base+ 帧级音频匹配 | 500,000 pair | - | - | - | - | - | `baseline/checkpoints/wavlm_matcher_full_e3.pt` | `14db8ae` |
-| E012 | 已完成，待线上验证 | 冻结 WavLM Base+ 音素 CTC + Temporal Adapter | 100,000 utterance | 0.8725 | 0.8723 | **0.8724** | - | 3 | `baseline/checkpoints/wavlm_base_plus_phoneme_temporal_100k_e3.pt` | `7fc28b7` |
+| E012 | 已完成 | 冻结 WavLM Base+ 音素 CTC + Temporal Adapter，batch size 128 | 100,000 utterance | 0.8725 | 0.8723 | **0.8724** | **0.86944** | 3 | `baseline/checkpoints/wavlm_base_plus_phoneme_temporal_100k_e3.pt` | `7fc28b7` |
+| E013 | 当前线上最佳，Dev 待补 | 冻结 WavLM Base+ 音素 CTC + Temporal Adapter，batch size 256，15 epoch | 100,000 utterance | - | - | - | **0.87676** | - | `baseline/checkpoints/wavlm_base_plus_phoneme_temporal_100k_bs256_e15.pt` | `7fc28b7` |
 
 ## 线上提交记录
 
-以下表格按比赛平台返回结果原样记录，当前最高分为 `0.84446`。
+以下表格按比赛平台返回结果原样记录，当前最高分为 `0.87676`。
 
 | ID | 状态 | 评分 | 提交文件名 | 提交者 | 提交时间 |
 |---:|---|---:|---|---|---|
-| 1 | 返回分数 | **0.84446** | `submission_wavlm_phoneme_ctc_full_scratch_epoch8.csv` | Mark | 2026-07-20 22:36:13 |
-| 2 | 返回分数 | 0.84074 | `submission_wavlm_phoneme_ctc_full_epoch4.csv` | Mark | 2026-07-20 12:04:42 |
-| 3 | 返回分数 | 0.84335 | `submission_wavlm_phoneme_ctc_full_epoch2.csv` | Mark | 2026-07-18 23:13:29 |
-| 4 | 返回分数 | 0.84202 | `submission_wavlm_ctc_rank_fusion.csv` | Mark | 2026-07-18 09:04:18 |
-| 5 | 返回分数 | 0.83939 | `submission_wavlm_phoneme_ctc_100k.csv` | Mark | 2026-07-17 23:11:50 |
-| 6 | 返回分数 | 0.81103 | `submission_wavlm_char_ctc_100k.csv` | Mark | 2026-07-17 19:42:00 |
-| 7 | 返回分数 | 0.65978 | `submission_frame_noise_50k.csv` | Mark | 2026-07-13 20:20:18 |
-| 8 | 返回分数 | 0.62547 | `submission.csv` | Mark | 2026-07-11 20:38:53 |
+| 1 | 返回分数 | **0.87676** | `submission_wavlm_base_plus_phoneme_temporal_100k_bs256_e15.csv` | Mark | 2026-07-27 12:21:32 |
+| 2 | 返回分数 | 0.86944 | `submission_wavlm_base_plus_phoneme_temporal_100k_e3.csv` | Mark | 2026-07-27 12:18:44 |
+| 3 | 返回分数 | 0.84446 | `submission_wavlm_phoneme_ctc_full_scratch_epoch8.csv` | Mark | 2026-07-20 22:36:13 |
+| 4 | 返回分数 | 0.84074 | `submission_wavlm_phoneme_ctc_full_epoch4.csv` | Mark | 2026-07-20 12:04:42 |
+| 5 | 返回分数 | 0.84335 | `submission_wavlm_phoneme_ctc_full_epoch2.csv` | Mark | 2026-07-18 23:13:29 |
+| 6 | 返回分数 | 0.84202 | `submission_wavlm_ctc_rank_fusion.csv` | Mark | 2026-07-18 09:04:18 |
+| 7 | 返回分数 | 0.83939 | `submission_wavlm_phoneme_ctc_100k.csv` | Mark | 2026-07-17 23:11:50 |
+| 8 | 返回分数 | 0.81103 | `submission_wavlm_char_ctc_100k.csv` | Mark | 2026-07-17 19:42:00 |
+| 9 | 返回分数 | 0.65978 | `submission_frame_noise_50k.csv` | Mark | 2026-07-13 20:20:18 |
+| 10 | 返回分数 | 0.62547 | `submission.csv` | Mark | 2026-07-11 20:38:53 |
 
 ## E001：帧级 CNN，padding mask 修复前
 
@@ -287,9 +290,21 @@ Dev 结果：
 
 与同为 100,000 utterance 的线性音素 CTC E005 相比，Dev Mean 从 `0.8406`
 提升至 `0.8724`，绝对提升 **`0.0318`**；Seen 提升 `0.0333`，Unseen 提升
-`0.0304`。这是目前最强的小规模架构收益，且两类子集同步提升。下一步先生成
-eval 提交验证线上相关性；线上确认后再考虑全量训练。暂不通过增加 epoch 或直接
-跑 Large 模型混淆该单因素结论。
+`0.0304`。线上得分 `0.86944`，相对 E005 的 `0.83939` 提升 **`0.03005`**，
+证明 Dev 收益基本保留到测试集。这是目前最强的小规模架构收益，且两类子集同步
+提升。
+
+## E013：100K Temporal Adapter，batch size 256，15 epoch
+
+配置沿用 E012，但将 batch size 从 128 增加到 256，并将训练目标从 3 epoch
+增加到 15 epoch。checkpoint 为
+`baseline/checkpoints/wavlm_base_plus_phoneme_temporal_100k_bs256_e15.pt`，
+提交文件为 `submission_wavlm_base_plus_phoneme_temporal_100k_bs256_e15.csv`。
+
+线上得分 **`0.87676`**，比 E012 提升 `0.00732`，比此前全量线性 CTC 最佳
+E009 提升 `0.03230`。由于该实验同时改变了 batch size 和训练轮数，不能把收益
+单独归因于增加 epoch。逐 epoch Dev 结果和 checkpoint 对应的最佳 epoch 尚未从
+服务器日志补录。
 
 ## 线上收益拆解
 
@@ -303,11 +318,14 @@ eval 提交验证线上相关性；线上确认后再考虑全量训练。暂不
 | 全量从零 epoch 8 | 100K 音素 CTC | `+0.00507` | 当前最佳，包含数据量、batch 和完整优化轨迹差异 |
 | 全量从零 epoch 8 | 全量 epoch 2 | `+0.00111` | 更多训练仅有千分位提升 |
 | 旧 checkpoint 兼容续训 epoch 4 | 全量 epoch 2 | `-0.00261` | dev 上升但线上下降，重建 optimizer 的续训不可靠 |
+| Temporal Adapter，100K/3 epoch | 100K 线性音素 CTC | **`+0.03005`** | 时序建模带来明确且可迁移的架构收益 |
+| Temporal Adapter，100K/15 epoch，batch 256 | 100K Temporal/3 epoch，batch 128 | `+0.00732` | 有额外收益，但 batch 和 epoch 同时变化，无法单独归因 |
 
-从官方 baseline `0.62547` 到当前最佳 `0.84446`，累计绝对提升为
-**`0.21899`**。收益主次已经明确：任务重构/强底模远大于音素监督，音素监督
-远大于数据扩容、分数融合和增加 epoch。下一阶段应优先验证新判别信息来源
-（注册音频分支、难负样本、监督融合）或更强底模，而不是继续增加 CTC 轮数。
+从官方 baseline `0.62547` 到当前最佳 `0.87676`，累计绝对提升为
+**`0.25129`**。收益主次已经明确：任务重构/强底模、音素监督和 Temporal
+Adapter 是三个主要台阶；数据扩容、分数融合和单纯增加 epoch 的收益明显更小。
+下一阶段应优先验证 Temporal Adapter 的全量迁移、更强底模或新的判别信息来源，
+而不是继续只增加当前 100K 实验的训练轮数。
 
 ## 后续记录模板
 
