@@ -31,6 +31,7 @@
 | E013 | 历史线上最佳 | 冻结 WavLM Base+ 音素 CTC + Temporal Adapter，batch size 256，15 epoch | 100,000 utterance | 0.8773 | 0.8710 | **0.8742** | **0.87676** | 13 | `baseline/checkpoints/wavlm_base_plus_phoneme_temporal_100k_bs256_e15.pt` | `7fc28b7` |
 | E014 | 当前线上最佳 | 冻结 WavLM Large 音素 CTC + Temporal Adapter，batch size 128 | 100,000 utterance | 0.8893 | 0.8802 | **0.8847** | **0.88555** | 1 | `baseline/checkpoints/wavlm_large_phoneme_temporal_100k_e3.pt` | `7fc28b7` |
 | E015 | 已完成，待线上验证 | 冻结 HuBERT Large 音素 CTC + Temporal Adapter，batch size 128 | 100,000 utterance | 0.8930 | 0.8803 | **0.8866** | - | 10 | `baseline/checkpoints/hubert_large_phoneme_temporal_100k_e3.pt` | `7fc28b7` |
+| E016 | 已完成，待线上验证 | 冻结 WavLM Large 音素 CTC + Temporal Adapter，从零重跑 10 epoch | 100,000 utterance | 0.8900 | 0.8860 | **0.8880** | - | 10 | `baseline/checkpoints/wavlm_large_phoneme_temporal_100k_e10.pt` | `7fc28b7` |
 
 ## 线上提交记录
 
@@ -378,6 +379,30 @@ utterance、batch size 128、3 epoch、两层 dim 256 Temporal Adapter、DEMAND
 高 `0.0019`；epoch 13 接近但低 `0.0002`。训练到 epoch 15 后未继续改善，当前
 配置已经进入平台期。使用保存最佳模型的 `.pt` 进行一次线上验证，不使用保存
 epoch 15 的 `.last.pt`。
+
+## E016：100K WavLM Large 从零重跑 10 epoch
+
+配置与 E014 相同，但使用新 checkpoint 从零训练到 10 epoch，不是从 E014
+续训。冻结参数 315,453,120，可训练参数 410,433，峰值显存 `6.83GB`。
+
+| Epoch | Seen | Unseen | Mean |
+|---:|---:|---:|---:|
+| 1 | 0.8854 | 0.8787 | 0.8821 |
+| 2 | 0.8889 | 0.8844 | 0.8866 |
+| 3 | 0.8864 | 0.8792 | 0.8828 |
+| 4 | 0.8862 | 0.8807 | 0.8834 |
+| 5 | 0.8872 | 0.8827 | 0.8850 |
+| 6 | 0.8878 | 0.8790 | 0.8834 |
+| 7 | 0.8926 | 0.8804 | 0.8865 |
+| 8 | 0.8889 | 0.8811 | 0.8850 |
+| 9 | 0.8925 | 0.8820 | 0.8873 |
+| 10 | 0.8900 | 0.8860 | **0.8880** |
+
+最佳 checkpoint 来自 epoch 10，Dev Mean 比 E014 高 `0.0033`，比 HuBERT
+E015 高 `0.0014`。虽然训练入口固定全局 seed=42，但当前噪声增强按进程 PID
+派生随机数，不同运行的增强序列并不完全可复现，因此 E016 应视为同配置的另一条
+随机轨迹，而不是 E014 的严格确定性复现。先线上验证最佳 `.pt`；后续需要将增强
+seed 改为显式、与 PID 无关的可控种子。
 
 ## 线上收益拆解
 
