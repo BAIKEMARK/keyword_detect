@@ -1,6 +1,6 @@
 # 实验记录
 
-最近更新：2026-07-20
+最近更新：2026-07-27
 
 ## 记录约定
 
@@ -27,6 +27,7 @@
 | E009 | 当前线上最佳 | 全量冻结 WavLM Base+ 音素 CTC，从零训练 10 epoch，batch size 256 | 1,000,000 utterance | 0.8408 | 0.8456 | 0.8432 | **0.84446** | 8 | `baseline/checkpoints/wavlm_phoneme_ctc_full_scratch_e10.pt` | `9b735c1` |
 | E010 | 已完成，不采用 | E007 旧 checkpoint 兼容续训，batch size 128，optimizer/scaler 重建 | 1,000,000 utterance | 0.8443 | 0.8460 | 0.8451 | **0.84074** | 4 | `baseline/checkpoints/wavlm_phoneme_ctc_full_e3.pt` | `9b735c1` |
 | E011 | 代码就绪，待训练 | 全量冻结 WavLM Base+ 帧级音频匹配 | 500,000 pair | - | - | - | - | - | `baseline/checkpoints/wavlm_matcher_full_e3.pt` | `14db8ae` |
+| E012 | 已完成，待线上验证 | 冻结 WavLM Base+ 音素 CTC + Temporal Adapter | 100,000 utterance | 0.8725 | 0.8723 | **0.8724** | - | 3 | `baseline/checkpoints/wavlm_base_plus_phoneme_temporal_100k_e3.pt` | `7fc28b7` |
 
 ## 线上提交记录
 
@@ -266,6 +267,29 @@ commit `14db8ae` 已让 `train_wavlm.py` 支持显式传入全量 `train_csv`、
 这表示“全量帧级音频匹配”的训练代码已经就绪，但实验尚未运行，也尚未加入
 难负样本、CTC 分数融合或监督式融合头。因此不能把 `14db8ae` 记作该路线已经
 验证有效，只能记作基础训练能力完成。
+
+## E012：100K 音素 CTC + Temporal Adapter
+
+配置：
+
+- 冻结 WavLM Base+，在 encoder 时序输出后加入两层带 mask 的卷积 Adapter
+- Adapter dim 256，训练参数 344,373；batch size 128，学习率 `1e-3`
+- 100,000 utterance，3 epoch，DEMAND 概率 0.5，SNR `[-10, 5]` dB
+- 峰值显存 `4.41GB`
+
+Dev 结果：
+
+| Epoch | Seen | Unseen | Mean |
+|---:|---:|---:|---:|
+| 1 | 0.8526 | 0.8504 | 0.8515 |
+| 2 | 0.8681 | 0.8625 | 0.8653 |
+| 3 | 0.8725 | 0.8723 | **0.8724** |
+
+与同为 100,000 utterance 的线性音素 CTC E005 相比，Dev Mean 从 `0.8406`
+提升至 `0.8724`，绝对提升 **`0.0318`**；Seen 提升 `0.0333`，Unseen 提升
+`0.0304`。这是目前最强的小规模架构收益，且两类子集同步提升。下一步先生成
+eval 提交验证线上相关性；线上确认后再考虑全量训练。暂不通过增加 epoch 或直接
+跑 Large 模型混淆该单因素结论。
 
 ## 线上收益拆解
 
