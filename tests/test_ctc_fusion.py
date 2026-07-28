@@ -180,6 +180,27 @@ class FusionCsvTest(unittest.TestCase):
                 report = json.load(file)
             self.assertEqual(report["rows"], 4)
             self.assertAlmostEqual(report["fusion"]["mean_auc"], 1.0)
+            self.assertEqual(report["models"], {
+                "a": "character", "b": "phoneme"})
+
+            generic_output = str(Path(directory) / "generic_submission.csv")
+            with mock.patch("sys.argv", [
+                    "fuse_ctc_scores.py",
+                    "--a-dev", char_dev,
+                    "--b-dev", phone_dev,
+                    "--a-eval", char_eval,
+                    "--b-eval", phone_eval,
+                    "--a-name", "wavlm_large",
+                    "--b-name", "hubert_large",
+                    "--out", generic_output,
+            ]), mock.patch("builtins.print"):
+                fusion_main()
+            with open(f"{generic_output}.json", encoding="utf-8") as file:
+                generic_report = json.load(file)
+            self.assertEqual(generic_report["models"], {
+                "a": "wavlm_large", "b": "hubert_large"})
+            self.assertIn("b_weight", generic_report["fusion"])
+            self.assertNotIn("character_dev", generic_report["sources"])
 
 
 if __name__ == "__main__":

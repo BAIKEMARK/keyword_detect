@@ -318,10 +318,14 @@ python3 baseline/infer_wavlm_ctc.py \
   --out submission_wavlm_phoneme_ctc_100k.csv
 ```
 
-## 字符与音素 CTC 秩融合
+## 双模型 CTC 秩融合
 
 融合只需要额外导出两个模型在有标签 dev 上的逐样本分数。测试集直接复用
-已经生成的字符和音素提交 CSV。先导出 dev 分数：
+已经生成的提交 CSV。脚本在 seen/unseen 内分别做秩归一化，在 dev 上搜索 B
+模型权重，再将该固定权重应用到 eval；不使用 eval 数据调权重。
+
+旧的 `--char-*` / `--phoneme-*` 参数仍可用。新模型使用通用的
+`--a-*` / `--b-*` 参数和可读名称。下面保留字符/音素融合的复现命令：
 
 ```bash
 mkdir -p scores
@@ -358,6 +362,72 @@ python3 baseline/fuse_ctc_scores.py \
 脚本分别在 seen/unseen 内对两个分支做平均秩归一化，在 dev 上以 0.001
 步长搜索一个全局音素权重，然后将固定权重应用于 eval。实验参数和 dev
 AUC 同时写入 `submission_wavlm_ctc_rank_fusion.csv.json`。
+
+### WavLM Large 与 HuBERT Large 融合
+
+当前主分支使用两个音素 Temporal CTC checkpoint。先导出各自在有标签 dev 的
+原始 CTC 分数：
+
+```bash
+mkdir -p scores
+export NLTK_DATA=/mnt/workspace/nltk_data
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
+python3 -u baseline/export_wavlm_ctc_dev.py \
+  --ckpt baseline/checkpoints/wavlm_large_phoneme_temporal_100k_e10.pt \
+  --model-id /mnt/workspace/models/wavlm-large \
+  --bs 128 \
+  --workers 8 \
+  --device cuda \
+  --out scores/dev_wavlm_large_phoneme_temporal_100k_e10.csv
+
+python3 -u baseline/export_wavlm_ctc_dev.py \
+  --ckpt baseline/checkpoints/hubert_large_phoneme_temporal_100k_e3.pt \
+  --model-id /mnt/workspace/models/hubert-large-ll60k \
+  --bs 128 \
+  --workers 8 \
+  --device cuda \
+  --out scores/dev_hubert_large_phoneme_temporal_100k_e10.csv
+```
+
+再搜索 HuBERT 权重并生成融合提交。两份输入 CSV 必须分别来自上面对应的
+checkpoint：
+
+```bash
+python3 -u baseline/fuse_ctc_scores.py \
+  --a-dev scores/dev_wavlm_large_phoneme_temporal_100k_e10.csv \
+  --b-dev scores/dev_hubert_large_phoneme_temporal_100k_e10.csv \
+  --a-eval submission_wavlm_large_phoneme_temporal_100k_e10_best_epoch10.csv \
+  --b-eval submission_hubert_large_phoneme_temporal_100k_best_epoch10.csv \
+  --a-name wavlm_large \
+  --b-name hubert_large \
+  --weight-step 0.001 \
+  --out submission_wavlm_hubert_large_rank_fusion.csv
+```
+
+提交前检查行数与报告中的 dev 融合分数：
+
+```bash
+wc -l submission_wavlm_hubert_large_rank_fusion.csv
+cat submission_wavlm_hubert_large_rank_fusion.csv.json
+```
+
+只有当 `fusion dev` 高于两个单模型 dev 分数时，才建议提交该融合结果。
+
+## 可复现随机种子
+
+`train_wavlm_ctc.py` 使用 `--seed` 同时控制模型初始化、样本顺序和真实噪声
+增强。噪声 RNG 按 DataLoader worker 的稳定 seed 初始化，不再受操作系统 PID
+影响。恢复训练必须使用与 checkpoint 相同的 `--seed`。
+
+```bash
+# 复现实验
+--seed 42
+
+# 训练一个可追溯的独立随机分支
+--seed 43
+```
 
 ## 全量50万 pair 训练
 

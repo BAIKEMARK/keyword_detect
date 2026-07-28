@@ -39,6 +39,7 @@ def parse_args(argv=None):
         "--subset", type=int, default=None,
         help="number of utterances; omit to use all training audio")
     parser.add_argument("--workers", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=TRAIN.seed)
     parser.add_argument("--device", default="auto")
     parser.add_argument(
         "--amp", action=argparse.BooleanOptionalAction, default=True)
@@ -139,7 +140,7 @@ def training_config(args, max_samples, train_utterances, amp_enabled, device):
         "amp": amp_enabled,
         "workers": args.workers,
         "device": str(device),
-        "seed": TRAIN.seed,
+        "seed": args.seed,
         "target_epochs": args.epochs,
     }
 
@@ -273,8 +274,8 @@ def evaluate(model, loader, device, amp_enabled, blank_id):
 
 def main():
     args = parse_args()
-    torch.manual_seed(TRAIN.seed)
-    np.random.seed(TRAIN.seed)
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
     device = select_device(args.device)
     if args.workers is None:
         args.workers = TRAIN.num_workers if device.type == "cuda" else 0
@@ -306,7 +307,7 @@ def main():
         raise ValueError("--subset must be positive when provided")
     count = len(examples) if args.subset is None else min(
         args.subset, len(examples))
-    indices = np.random.default_rng(TRAIN.seed).permutation(len(examples))[:count]
+    indices = np.random.default_rng(args.seed).permutation(len(examples))[:count]
     train_examples = [examples[index] for index in indices]
 
     print(f"device: {device}", flush=True)
@@ -327,6 +328,7 @@ def main():
     print(f"epochs: target={args.epochs}", flush=True)
     print(f"batch size: {args.bs}", flush=True)
     print(f"learning rate: {args.lr}", flush=True)
+    print(f"seed: {args.seed}", flush=True)
     print(f"process id: {os.getpid()}", flush=True)
 
     augment = None
@@ -337,7 +339,7 @@ def main():
             args.noise_snr_min,
             args.noise_snr_max,
             args.noise_dir,
-            TRAIN.seed,
+            args.seed,
         )
         if not augment.noise_paths:
             raise FileNotFoundError(

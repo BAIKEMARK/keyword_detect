@@ -13,8 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "baseline"))
 
 from config import AudioConfig  # noqa: E402
-from data import (WavePairDataset, collate_wave_pairs, normalize_waveform,
-                  truncate_waveform)  # noqa: E402
+from data import (NoiseAugmenter, WavePairDataset, collate_wave_pairs,
+                  normalize_waveform, truncate_waveform)  # noqa: E402
 from train_wavlm import (default_last_checkpoint_path, parse_args,  # noqa: E402
                          resume_position, training_config,
                          validate_resume_checkpoint)
@@ -23,6 +23,19 @@ from wavlm_model import FrozenWavLMMatcher  # noqa: E402
 
 
 class WaveDataTest(unittest.TestCase):
+    def test_noise_rng_is_worker_seeded_not_pid_seeded(self):
+        worker = types.SimpleNamespace(id=3, seed=987654321)
+        waveform = np.linspace(-1.0, 1.0, 32, dtype=np.float32)
+
+        with mock.patch("data.get_worker_info", return_value=worker), \
+                mock.patch("data.os.getpid", side_effect=AssertionError):
+            first = NoiseAugmenter(16000, 1.0, 0.0, 0.0, seed=19)(waveform)
+            second = NoiseAugmenter(16000, 1.0, 0.0, 0.0, seed=19)(waveform)
+            different = NoiseAugmenter(16000, 1.0, 0.0, 0.0, seed=20)(waveform)
+
+        np.testing.assert_allclose(first, second)
+        self.assertFalse(np.allclose(first, different))
+
     def test_training_cli_supports_full_data_and_resume(self):
         args = parse_args([
             "--train-zip", "train/wav.zip",

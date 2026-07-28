@@ -11,7 +11,7 @@ import numpy as np
 import soundfile as sf
 import torch
 import torchaudio
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, get_worker_info
 
 from config import AudioConfig
 
@@ -90,7 +90,7 @@ class NoiseAugmenter:
         self.snr_min = snr_min
         self.snr_max = snr_max
         self.seed = seed
-        self._rngs: dict[int, np.random.Generator] = {}
+        self._rngs: dict[tuple, np.random.Generator] = {}
         self.noise_paths = self._find_noise_paths(noise_dir)
 
     @staticmethod
@@ -105,10 +105,17 @@ class NoiseAugmenter:
         return sorted(paths)
 
     def _rng(self) -> np.random.Generator:
-        pid = os.getpid()
-        if pid not in self._rngs:
-            self._rngs[pid] = np.random.default_rng(self.seed + pid)
-        return self._rngs[pid]
+        worker = get_worker_info()
+        if worker is None:
+            key = ("main", self.seed)
+            entropy = [self.seed]
+        else:
+            key = ("worker", worker.id, worker.seed)
+            entropy = [self.seed, worker.id, worker.seed]
+        if key not in self._rngs:
+            self._rngs[key] = np.random.default_rng(
+                np.random.SeedSequence(entropy))
+        return self._rngs[key]
 
     def __call__(self, wav: np.ndarray) -> np.ndarray:
         rng = self._rng()

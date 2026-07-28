@@ -182,6 +182,7 @@ class CTCDataTest(unittest.TestCase):
             "--head", "temporal",
             "--adapter-dim", "192",
             "--adapter-layers", "3",
+            "--seed", "123",
             "--resume", "checkpoint.pt",
             "--last-out", "latest.pt",
         ])
@@ -191,6 +192,7 @@ class CTCDataTest(unittest.TestCase):
         self.assertEqual(args.head, "temporal")
         self.assertEqual(args.adapter_dim, 192)
         self.assertEqual(args.adapter_layers, 3)
+        self.assertEqual(args.seed, 123)
         self.assertEqual(args.resume, "checkpoint.pt")
         self.assertEqual(args.last_out, "latest.pt")
 

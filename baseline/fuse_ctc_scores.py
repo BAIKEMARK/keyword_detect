@@ -281,39 +281,60 @@ def fuse_eval_rows(rows: Sequence[AlignedRow],
     ]
 
 
-def _parse_args():
+def _parse_args(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--char-dev", required=True)
-    parser.add_argument("--phoneme-dev", required=True)
-    parser.add_argument("--char-eval", required=True)
-    parser.add_argument("--phoneme-eval", required=True)
+    for generic, legacy in (
+            ("a-dev", "char-dev"),
+            ("b-dev", "phoneme-dev"),
+            ("a-eval", "char-eval"),
+            ("b-eval", "phoneme-eval")):
+        group = parser.add_mutually_exclusive_group(required=True)
+        group.add_argument(f"--{generic}")
+        group.add_argument(f"--{legacy}")
+    parser.add_argument("--a-name", default=None)
+    parser.add_argument("--b-name", default=None)
     parser.add_argument("--out", default="submission_ctc_fusion.csv")
     parser.add_argument("--report", default=None)
     parser.add_argument("--weight-step", type=float, default=0.001)
-    return parser.parse_args()
+    return parser.parse_args(argv)
+
+
+def _resolved_inputs(args):
+    legacy = args.char_dev is not None
+    return {
+        "a_dev": args.a_dev or args.char_dev,
+        "b_dev": args.b_dev or args.phoneme_dev,
+        "a_eval": args.a_eval or args.char_eval,
+        "b_eval": args.b_eval or args.phoneme_eval,
+        "a_name": args.a_name or ("character" if legacy else "model_a"),
+        "b_name": args.b_name or ("phoneme" if legacy else "model_b"),
+        "legacy": legacy,
+    }
 
 
 def main():
     args = _parse_args()
+    inputs = _resolved_inputs(args)
     dev_rows = align_dev_rows(
-        read_dev_scores(args.char_dev), read_dev_scores(args.phoneme_dev))
+        read_dev_scores(inputs["a_dev"]), read_dev_scores(inputs["b_dev"]))
     character, phoneme, subsets = _arrays(dev_rows)
     labels = np.array([row.label for row in dev_rows], dtype=np.int64)
     result = search_phoneme_weight(
         character, phoneme, labels, subsets, args.weight_step)
 
-    print(f"character dev: seen={result.character_seen_auc:.4f} "
+    print(f"{inputs['a_name']} dev: seen={result.character_seen_auc:.4f} "
           f"unseen={result.character_unseen_auc:.4f} "
           f"mean={result.character_mean_auc:.4f}")
-    print(f"phoneme dev:   seen={result.phoneme_seen_auc:.4f} "
+    print(f"{inputs['b_name']} dev: seen={result.phoneme_seen_auc:.4f} "
           f"unseen={result.phoneme_unseen_auc:.4f} "
           f"mean={result.phoneme_mean_auc:.4f}")
     print(f"fusion dev:    seen={result.seen_auc:.4f} "
           f"unseen={result.unseen_auc:.4f} mean={result.mean_auc:.4f} "
-          f"phoneme_weight={result.weight:.3f}")
+          f"{inputs['b_name']}_weight={result.weight:.3f}")
 
     eval_rows = align_eval_rows(
-        read_eval_scores(args.char_eval), read_eval_scores(args.phoneme_eval))
+        read_eval_scores(inputs["a_eval"]),
+        read_eval_scores(inputs["b_eval"]))
     fused_rows = fuse_eval_rows(eval_rows, result.weight)
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out, "w", newline="", encoding="utf-8") as file:
@@ -323,24 +344,35 @@ def main():
     print(f"wrote {args.out} ({len(fused_rows)} rows)")
 
     report_path = args.report or f"{args.out}.json"
+    fusion_report = asdict(result)
+    fusion_report["b_weight"] = result.weight
     report = {
-        "fusion": asdict(result),
+        "fusion": fusion_report,
+        "models": {"a": inputs["a_name"], "b": inputs["b_name"]},
         "sources": {
-            "character_dev": args.char_dev,
-            "phoneme_dev": args.phoneme_dev,
-            "character_eval": args.char_eval,
-            "phoneme_eval": args.phoneme_eval,
+            "a_dev": inputs["a_dev"],
+            "b_dev": inputs["b_dev"],
+            "a_eval": inputs["a_eval"],
+            "b_eval": inputs["b_eval"],
         },
         "submission": args.out,
         "rows": len(fused_rows),
     }
+    if inputs["legacy"]:
+        report["sources"].update({
+            "character_dev": inputs["a_dev"],
+            "phoneme_dev": inputs["b_dev"],
+            "character_eval": inputs["a_eval"],
+            "phoneme_eval": inputs["b_eval"],
+        })
     os.makedirs(os.path.dirname(report_path) or ".", exist_ok=True)
     with open(report_path, "w", encoding="utf-8") as file:
         json.dump(report, file, ensure_ascii=True, indent=2, sort_keys=True)
         file.write("\n")
     print(f"wrote {report_path}")
-    if result.mean_auc <= result.phoneme_mean_auc:
-        print("warning: fusion does not improve phoneme-only dev AUC")
+    best_single = max(result.character_mean_auc, result.phoneme_mean_auc)
+    if result.mean_auc <= best_single:
+        print("warning: fusion does not improve the best single-model dev AUC")
 
 
 if __name__ == "__main__":
