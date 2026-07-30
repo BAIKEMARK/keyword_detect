@@ -31,6 +31,9 @@ class CTCVocabulary(Protocol):
     def encode(self, text: str) -> torch.Tensor:
         ...
 
+    def normalize(self, text: str) -> str:
+        ...
+
 
 def _normalize_keyword(text: str) -> str:
     normalized = text.strip().lower()

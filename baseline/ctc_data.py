@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 from functools import partial
-from typing import List, Optional
+from typing import List, Mapping, Optional
 
 import torch
 from torch.utils.data import Dataset
@@ -112,13 +112,23 @@ def _encode_texts(texts, vocabulary: CTCVocabulary):
     return targets, lengths
 
 
-def collate_ctc_utterances(batch, vocabulary: CTCVocabulary):
+def collate_ctc_utterances(
+        batch, vocabulary: CTCVocabulary,
+        hard_negatives: Optional[Mapping[str, str]] = None):
     waveforms = _pad_waveforms([item[0] for item in batch])
     sample_lengths = torch.tensor([item[3] for item in batch], dtype=torch.long)
     targets, target_lengths = _encode_texts(
         [item[1] for item in batch], vocabulary)
     wav_names = [item[2] for item in batch]
-    return waveforms, sample_lengths, targets, target_lengths, wav_names
+    result = (waveforms, sample_lengths, targets, target_lengths, wav_names)
+    if hard_negatives is None:
+        return result
+    negative_texts = [
+        hard_negatives[vocabulary.normalize(item[1])] for item in batch
+    ]
+    negative_targets, negative_target_lengths = _encode_texts(
+        negative_texts, vocabulary)
+    return (*result, negative_targets, negative_target_lengths)
 
 
 def collate_ctc_scores(batch, vocabulary: CTCVocabulary):
@@ -132,8 +142,14 @@ def collate_ctc_scores(batch, vocabulary: CTCVocabulary):
             pair_ids)
 
 
-def ctc_utterance_collate(vocabulary: CTCVocabulary):
-    return partial(collate_ctc_utterances, vocabulary=vocabulary)
+def ctc_utterance_collate(
+        vocabulary: CTCVocabulary,
+        hard_negatives: Optional[Mapping[str, str]] = None):
+    return partial(
+        collate_ctc_utterances,
+        vocabulary=vocabulary,
+        hard_negatives=hard_negatives,
+    )
 
 
 def ctc_score_collate(vocabulary: CTCVocabulary):

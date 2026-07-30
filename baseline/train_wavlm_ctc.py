@@ -6,10 +6,12 @@ import time
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from sklearn.metrics import roc_auc_score
 from torch.utils.data import DataLoader
 
 from config import AUDIO, PATHS, TRAIN
+from ctc_hard_negative import build_phoneme_hard_negatives
 from ctc_data import (CTCScoreDataset, CTCUtteranceDataset,
                       ctc_score_collate, ctc_utterance_collate,
                       load_ctc_score_pairs, load_ctc_training_examples)
@@ -28,6 +30,8 @@ def parse_args(argv=None):
         "--head", choices=("linear", "temporal"), default="linear")
     parser.add_argument("--adapter-dim", type=int, default=256)
     parser.add_argument("--adapter-layers", type=int, default=2)
+    parser.add_argument("--hard-negative-weight", type=float, default=0.0)
+    parser.add_argument("--hard-negative-margin", type=float, default=0.5)
     parser.add_argument("--train-zip", default=PATHS.train_zip)
     parser.add_argument("--train-csv", default=PATHS.train_csv)
     parser.add_argument("--max-seconds", type=float, default=2.5)
@@ -69,7 +73,7 @@ def parse_args(argv=None):
 
 
 def make_train_loader(examples, train_zip, max_samples, batch_size, workers,
-                      device, vocabulary, augment):
+                      device, vocabulary, augment, hard_negatives=None):
     dataset = CTCUtteranceDataset(
         examples, train_zip, AUDIO, max_samples, augment)
     return DataLoader(
@@ -77,7 +81,7 @@ def make_train_loader(examples, train_zip, max_samples, batch_size, workers,
         batch_size=batch_size,
         shuffle=True,
         num_workers=workers,
-        collate_fn=ctc_utterance_collate(vocabulary),
+        collate_fn=ctc_utterance_collate(vocabulary, hard_negatives),
         pin_memory=should_pin_memory(device),
         drop_last=True,
         persistent_workers=workers > 0,
@@ -112,6 +116,51 @@ def ctc_valid_mask(output_lengths, targets, target_lengths):
     return output_lengths >= required_ctc_frames(targets, target_lengths)
 
 
+def ctc_training_objective(
+        log_probs, output_lengths, targets, target_lengths, blank_id,
+        negative_targets=None, negative_target_lengths=None,
+        hard_negative_weight=0.0, hard_negative_margin=0.5):
+    valid = ctc_valid_mask(output_lengths, targets, target_lengths)
+    if not valid.any():
+        raise RuntimeError("training batch has no CTC-valid targets")
+    true_nll = F.ctc_loss(
+        log_probs[valid].transpose(0, 1), targets[valid],
+        output_lengths[valid], target_lengths[valid], blank=blank_id,
+        reduction="none", zero_infinity=True)
+    ctc_loss = (
+        true_nll / target_lengths[valid].to(true_nll.dtype)
+    ).mean()
+    margin_loss = log_probs.new_zeros(())
+    if hard_negative_weight > 0:
+        if negative_targets is None or negative_target_lengths is None:
+            raise ValueError(
+                "hard-negative targets are required when their weight "
+                "is positive")
+        margin_valid = valid & ctc_valid_mask(
+            output_lengths, negative_targets, negative_target_lengths)
+        if not margin_valid.any():
+            raise RuntimeError(
+                "training batch has no CTC-valid hard-negative targets")
+        true_margin_nll = F.ctc_loss(
+            log_probs[margin_valid].transpose(0, 1), targets[margin_valid],
+            output_lengths[margin_valid], target_lengths[margin_valid],
+            blank=blank_id, reduction="none", zero_infinity=True)
+        negative_nll = F.ctc_loss(
+            log_probs[margin_valid].transpose(0, 1),
+            negative_targets[margin_valid], output_lengths[margin_valid],
+            negative_target_lengths[margin_valid], blank=blank_id,
+            reduction="none", zero_infinity=True)
+        true_score = -true_margin_nll / target_lengths[margin_valid].to(
+            true_margin_nll.dtype)
+        negative_score = -negative_nll / negative_target_lengths[
+            margin_valid].to(negative_nll.dtype)
+        margin_loss = F.softplus(
+            hard_negative_margin + negative_score - true_score).mean()
+    total_loss = ctc_loss + hard_negative_weight * margin_loss
+    skipped = int((~valid).sum().item())
+    return total_loss, ctc_loss, margin_loss, skipped
+
+
 def default_last_checkpoint_path(out_path):
     stem, extension = os.path.splitext(out_path)
     if not extension:
@@ -126,6 +175,8 @@ def training_config(args, max_samples, train_utterances, amp_enabled, device):
         "head_type": args.head,
         "adapter_dim": args.adapter_dim,
         "adapter_layers": args.adapter_layers,
+        "hard_negative_weight": args.hard_negative_weight,
+        "hard_negative_margin": args.hard_negative_margin,
         "train_csv": args.train_csv,
         "train_zip": args.train_zip,
         "train_utterances": train_utterances,
@@ -156,6 +207,7 @@ def validate_resume_checkpoint(checkpoint, config, vocabulary):
     path_keys = {"train_csv", "train_zip", "noise_dir"}
     checked_keys = (
         "model_id", "units", "head_type", "adapter_dim", "adapter_layers",
+        "hard_negative_weight", "hard_negative_margin",
         "vocabulary", "train_csv", "train_zip",
         "train_utterances", "max_samples", "dropout", "batch_size",
         "learning_rate", "noise_prob", "noise_snr_min", "noise_snr_max",
@@ -223,6 +275,8 @@ def checkpoint_state(model, optimizer, scaler, config, vocabulary, device,
         "head_type": config["head_type"],
         "adapter_dim": config["adapter_dim"],
         "adapter_layers": config["adapter_layers"],
+        "hard_negative_weight": config["hard_negative_weight"],
+        "hard_negative_margin": config["hard_negative_margin"],
         "vocabulary": vocabulary.symbols,
         "train_csv": config["train_csv"],
         "train_zip": config["train_zip"],
@@ -285,6 +339,12 @@ def main():
         raise ValueError("--max-seconds must be positive")
     if args.adapter_dim <= 0 or args.adapter_layers <= 0:
         raise ValueError("--adapter-dim and --adapter-layers must be positive")
+    if args.hard_negative_weight < 0 or args.hard_negative_margin < 0:
+        raise ValueError(
+            "--hard-negative-weight and --hard-negative-margin "
+            "must be non-negative")
+    if args.hard_negative_weight > 0 and args.units != "phoneme":
+        raise ValueError("hard-negative training currently requires phoneme units")
 
     for description, path in (
             ("training CSV", args.train_csv),
@@ -309,6 +369,13 @@ def main():
         args.subset, len(examples))
     indices = np.random.default_rng(args.seed).permutation(len(examples))[:count]
     train_examples = [examples[index] for index in indices]
+    hard_negatives = None
+    if args.hard_negative_weight > 0:
+        hard_negatives = build_phoneme_hard_negatives(
+            vocabulary,
+            [example["text"] for example in train_examples],
+            [example["text"] for example in examples],
+        )
 
     print(f"device: {device}", flush=True)
     print(f"workers: {args.workers}", flush=True)
@@ -328,6 +395,9 @@ def main():
     print(f"epochs: target={args.epochs}", flush=True)
     print(f"batch size: {args.bs}", flush=True)
     print(f"learning rate: {args.lr}", flush=True)
+    print(f"hard negatives: weight={args.hard_negative_weight} "
+          f"margin={args.hard_negative_margin} "
+          f"anchors={len(hard_negatives or {})}", flush=True)
     print(f"seed: {args.seed}", flush=True)
     print(f"process id: {os.getpid()}", flush=True)
 
@@ -371,7 +441,7 @@ def main():
 
     train_loader = make_train_loader(
         train_examples, args.train_zip, max_samples, args.bs, args.workers, device,
-        vocabulary, augment)
+        vocabulary, augment, hard_negatives)
     dev_seen = make_score_loader(
         PATHS.dev_seen_zip, PATHS.dev_seen_csv, max_samples, args.bs,
         args.workers, device, vocabulary)
@@ -390,8 +460,6 @@ def main():
     print(f"params: trainable={trainable:,} frozen={frozen:,}", flush=True)
 
     optimizer = torch.optim.AdamW(model.head.parameters(), lr=args.lr)
-    criterion = torch.nn.CTCLoss(
-        blank=vocabulary.blank_id, reduction="mean", zero_infinity=True)
     scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
 
     best = -1.0
@@ -429,12 +497,20 @@ def main():
         model.train()
         started = time.time()
         loss_sum = 0.0
+        ctc_loss_sum = 0.0
+        margin_loss_sum = 0.0
         skipped_epoch = 0
         if device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(device)
 
         for iteration, batch in enumerate(train_loader, 1):
-            waveforms, sample_lengths, targets, target_lengths, wav_names = batch
+            (waveforms, sample_lengths, targets,
+             target_lengths, wav_names) = batch[:5]
+            negative_targets = None
+            negative_target_lengths = None
+            if hard_negatives is not None:
+                negative_targets = _move(batch[5], device)
+                negative_target_lengths = _move(batch[6], device)
             waveforms = _move(waveforms, device)
             sample_lengths = _move(sample_lengths, device)
             targets = _move(targets, device)
@@ -445,25 +521,24 @@ def main():
                     enabled=amp_enabled):
                 log_probs, output_lengths = model.log_probs(
                     waveforms, sample_lengths)
-                valid = ctc_valid_mask(
-                    output_lengths, targets, target_lengths)
-                skipped = int((~valid).sum().item())
-                skipped_epoch += skipped
-                if not valid.any():
-                    raise RuntimeError("training batch has no CTC-valid targets")
-                loss = criterion(
-                    log_probs[valid].transpose(0, 1),
-                    targets[valid],
-                    output_lengths[valid],
-                    target_lengths[valid],
+                loss, ctc_loss, margin_loss, skipped = ctc_training_objective(
+                    log_probs, output_lengths, targets, target_lengths,
+                    vocabulary.blank_id, negative_targets,
+                    negative_target_lengths, args.hard_negative_weight,
+                    args.hard_negative_margin,
                 )
+                skipped_epoch += skipped
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
             loss_sum += loss.item()
+            ctc_loss_sum += ctc_loss.item()
+            margin_loss_sum += margin_loss.item()
             if iteration % args.log_every == 0:
                 print(f"  ep{epoch} {iteration}/{len(train_loader)} "
-                      f"ctc_loss={loss_sum/iteration:.4f}", flush=True)
+                      f"loss={loss_sum/iteration:.4f} "
+                      f"ctc={ctc_loss_sum/iteration:.4f} "
+                      f"margin={margin_loss_sum/iteration:.4f}", flush=True)
 
         seen_auc = evaluate(
             model, dev_seen, device, amp_enabled, vocabulary.blank_id)

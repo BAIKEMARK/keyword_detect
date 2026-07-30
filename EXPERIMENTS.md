@@ -1,6 +1,6 @@
 # 实验记录
 
-最近更新：2026-07-28
+最近更新：2026-07-30
 
 ## 记录约定
 
@@ -33,6 +33,8 @@
 | E015 | 已完成，融合分支 | 冻结 HuBERT Large 音素 CTC + Temporal Adapter，batch size 128 | 100,000 utterance | 0.8930 | 0.8803 | **0.8866** | **0.89071** | 10 | `baseline/checkpoints/hubert_large_phoneme_temporal_100k_e3.pt` | `7fc28b7` |
 | E016 | 已完成 | 冻结 WavLM Large 音素 CTC + Temporal Adapter，从零重跑 10 epoch | 100,000 utterance | 0.8900 | 0.8860 | **0.8880** | **0.89054** | 10 | `baseline/checkpoints/wavlm_large_phoneme_temporal_100k_e10.pt` | `7fc28b7` |
 | E017 | 当前线上最佳 | WavLM Large + HuBERT Large CTC 秩融合 | 100,000 utterance 两分支 | - | - | - | **0.90123** | - | E015 + E016 | `c3f1b5c` |
+| E018 | 诊断完成，淘汰替代打分 | Large CTC greedy、似然差和编辑相似度零重训诊断 | E015 + E016 | 0.8930 / 0.8900 | 0.8803 / 0.8860 | 0.8866 / 0.8880 | - | - | E015 + E016 | `7c1fe7b` |
+| E019 | 已完成，停止路线 | 冻结 HuBERT Large 注册音频 soft alignment matcher | 50,000 pair | 0.5182 | 0.4985 | 0.5083 | - | 1 | `baseline/checkpoints/hubert_large_align_50k_e3.pt` | `7c1fe7b` |
 
 ## 线上提交记录
 
@@ -409,6 +411,41 @@ E015 高 `0.0014`。虽然训练入口固定全局 seed=42，但当前噪声增�
 随机轨迹，而不是 E014 的严格确定性复现。先线上验证最佳 `.pt`；后续需要将增强
 seed 改为显式、与 PID 无关的可控种子。线上得分 **`0.89054`**，比 E014 提升
 `0.00499`，仅比 HuBERT E015 低 `0.00017`。
+
+## E018：Large CTC 零重训打分诊断
+
+直接复用 E015/E016 checkpoint，在 10,000 条有标签 dev pair 上比较目标文本
+CTC 分数、greedy 路径、目标与 greedy 的似然差及音素编辑相似度。
+
+| 模型 | 特征 | Seen | Unseen | Mean/All |
+|---|---|---:|---:|---:|
+| HuBERT Large | `target_score` | 0.8930 | 0.8803 | **0.8866** |
+| HuBERT Large | `likelihood_margin` | 0.7634 | 0.7438 | 0.7537 |
+| HuBERT Large | `edit_similarity` | 0.7477 | 0.7331 | 0.7404 |
+| WavLM Large | `target_score` | 0.8900 | 0.8860 | **0.8877** |
+| WavLM Large | `likelihood_margin` | 0.7739 | 0.7496 | 0.7616 |
+| WavLM Large | `edit_similarity` | 0.7549 | 0.7448 | 0.7493 |
+
+两模型的 greedy score、帧置信度、blank 比例和解码长度 AUC 都接近 `0.5`。
+结论：不能用 greedy、似然差或编辑相似度替换现有目标 CTC 分数；后续改为在训练期
+加入近音负词和判别 margin，而不是继续调整零训练推理公式。
+
+## E019：HuBERT Large 注册音频对齐头
+
+冻结 HuBERT Large LL60K，训练双向 soft frame alignment 头；50,000 pair，
+batch size 32，dev batch size 8，3 epoch，DEMAND 加噪概率 0.5。可训练参数
+133,499，峰值显存 `4.02GB`。
+
+| Epoch | Seen | Unseen | Mean |
+|---:|---:|---:|---:|
+| 1 | 0.5182 | 0.4985 | **0.5083** |
+| 2 | 0.5182 | 0.4985 | 0.5083 |
+| 3 | 0.5182 | 0.4985 | 0.5083 |
+
+训练损失长期停留在约 `1.109`，三个 epoch 的 AUC 排序完全不变，符合加权 BCE
+常数预测。实现测试已覆盖参数梯度、padding mask 和 enroll/query 对称性，因此当前
+结论是无条件音频相似度特征缺乏判别信息。停止扩大数据和增加 epoch；只有在加入
+音素条件或 hard negative 后才重新考虑注册音频分支。
 
 ## 线上收益拆解
 

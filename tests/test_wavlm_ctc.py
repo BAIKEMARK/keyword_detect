@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "baseline"))
 
 from config import AudioConfig  # noqa: E402
+from ctc_hard_negative import build_phoneme_hard_negatives  # noqa: E402
 from ctc_data import (CTCScoreDataset, collate_ctc_scores,  # noqa: E402
                       collate_ctc_utterances, load_ctc_score_pairs,
                       load_ctc_training_examples)
@@ -24,7 +25,8 @@ from ctc_text import (CharacterVocabulary, PhonemeVocabulary,  # noqa: E402
                       _configure_nltk_data, build_vocabulary, checkpoint_units,
                       required_ctc_frames, warm_vocabulary)
 from infer_wavlm_ctc import collect_scores  # noqa: E402
-from train_wavlm_ctc import (ctc_valid_mask,  # noqa: E402
+from train_wavlm_ctc import (ctc_training_objective,  # noqa: E402
+                             ctc_valid_mask,
                              default_last_checkpoint_path, parse_args,
                              training_config,
                              validate_resume_checkpoint)
@@ -117,6 +119,19 @@ class PhonemeVocabularyTest(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertEqual(calls, ["cat"])
 
+    def test_mines_nearest_distinct_phoneme_neighbor(self):
+        pronunciations = {
+            "cat": ["K", "AE1", "T"],
+            "kat": ["K", "AE1", "T"],
+            "bat": ["B", "AE1", "T"],
+            "dog": ["D", "AO1", "G"],
+        }
+        vocabulary = PhonemeVocabulary(
+            converter=lambda text: pronunciations[text])
+        neighbors = build_phoneme_hard_negatives(
+            vocabulary, ["cat"], pronunciations)
+        self.assertEqual(neighbors, {"cat": "bat"})
+
 
 class CTCDataTest(unittest.TestCase):
     def setUp(self):
@@ -180,6 +195,14 @@ class CTCDataTest(unittest.TestCase):
         torch.testing.assert_close(result[4], torch.tensor([1.0, 0.0]))
         self.assertEqual(result[5], ["pair_1", "pair_2"])
 
+        hard_result = collate_ctc_utterances(
+            utterance_batch, self.vocabulary,
+            hard_negatives={"cat": "bat", "letter": "better"})
+        self.assertEqual(len(hard_result), 7)
+        torch.testing.assert_close(
+            hard_result[5][0, :3], self.vocabulary.encode("bat"))
+        torch.testing.assert_close(hard_result[6], torch.tensor([3, 6]))
+
     @mock.patch("ctc_data._load_waveform")
     def test_score_dataset_reads_query_audio_only(self, load_waveform):
         load_waveform.return_value = torch.ones(8)
@@ -199,6 +222,8 @@ class CTCDataTest(unittest.TestCase):
             "--head", "temporal",
             "--adapter-dim", "192",
             "--adapter-layers", "3",
+            "--hard-negative-weight", "0.25",
+            "--hard-negative-margin", "0.75",
             "--seed", "123",
             "--resume", "checkpoint.pt",
             "--last-out", "latest.pt",
@@ -209,6 +234,8 @@ class CTCDataTest(unittest.TestCase):
         self.assertEqual(args.head, "temporal")
         self.assertEqual(args.adapter_dim, 192)
         self.assertEqual(args.adapter_layers, 3)
+        self.assertEqual(args.hard_negative_weight, 0.25)
+        self.assertEqual(args.hard_negative_margin, 0.75)
         self.assertEqual(args.seed, 123)
         self.assertEqual(args.resume, "checkpoint.pt")
         self.assertEqual(args.last_out, "latest.pt")
@@ -268,6 +295,34 @@ class CTCDataTest(unittest.TestCase):
 
 
 class CTCScoreTest(unittest.TestCase):
+    def test_hard_negative_objective_adds_margin_and_backpropagates(self):
+        vocabulary = CharacterVocabulary()
+        torch.manual_seed(41)
+        logits = torch.randn(
+            2, 6, len(vocabulary), dtype=torch.float64,
+            requires_grad=True)
+        log_probs = logits.log_softmax(dim=-1)
+        targets = torch.stack([
+            vocabulary.encode("cat"), vocabulary.encode("bat")])
+        negatives = torch.stack([
+            vocabulary.encode("bat"), vocabulary.encode("cat")])
+        lengths = torch.tensor([3, 3])
+        total, ctc_loss, margin_loss, skipped = ctc_training_objective(
+            log_probs, torch.tensor([6, 6]), targets, lengths,
+            vocabulary.blank_id, negatives, lengths,
+            hard_negative_weight=0.5, hard_negative_margin=0.5)
+        expected_ctc = torch.nn.CTCLoss(
+            blank=vocabulary.blank_id, reduction="mean",
+            zero_infinity=True)(
+                log_probs.transpose(0, 1), targets,
+                torch.tensor([6, 6]), lengths)
+        torch.testing.assert_close(ctc_loss, expected_ctc)
+        torch.testing.assert_close(total, ctc_loss + 0.5 * margin_loss)
+        self.assertGreater(margin_loss.item(), 0.0)
+        self.assertEqual(skipped, 0)
+        total.backward()
+        self.assertTrue(torch.isfinite(logits.grad).all())
+
     def test_matches_torch_ctc_loss_with_repeated_characters(self):
         torch.manual_seed(23)
         vocabulary = CharacterVocabulary()
