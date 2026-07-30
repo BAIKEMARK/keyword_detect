@@ -18,7 +18,8 @@ from data import (NoiseAugmenter, WavePairDataset, collate_wave_pairs,
 from train_wavlm import (default_last_checkpoint_path, parse_args,  # noqa: E402
                          resume_position, training_config,
                          validate_resume_checkpoint)
-from wavlm_model import SymmetricFrameMatchHead  # noqa: E402
+from wavlm_model import (AlignedFrameMatchHead,  # noqa: E402
+                         SymmetricFrameMatchHead)
 from wavlm_model import FrozenWavLMMatcher  # noqa: E402
 
 
@@ -172,6 +173,33 @@ class WavLMHeadTest(unittest.TestCase):
                 self.assertIsNotNone(parameter.grad)
                 self.assertTrue(torch.isfinite(parameter.grad).all())
 
+    def test_aligned_head_is_symmetric_and_masks_padding(self):
+        torch.manual_seed(29)
+        head = AlignedFrameMatchHead(
+            hidden_size=8, num_hidden_states=3, projection_dim=4,
+            temperature=0.1)
+        hidden = tuple(torch.randn(4, 7, 8) for _ in range(3))
+        e_lens = torch.tensor([4, 6])
+        q_lens = torch.tensor([5, 3])
+        changed = [layer.clone() for layer in hidden]
+        lengths = torch.cat([e_lens, q_lens])
+        for layer in changed:
+            for index, length in enumerate(lengths.tolist()):
+                layer[index, length:] = 1000.0
+        expected = head(hidden, e_lens, q_lens)
+        actual = head(tuple(changed), e_lens, q_lens)
+        torch.testing.assert_close(actual, expected)
+
+        swapped = tuple(torch.cat([layer[2:], layer[:2]], dim=0)
+                        for layer in hidden)
+        torch.testing.assert_close(
+            head(swapped, q_lens, e_lens), expected)
+        actual.sum().backward()
+        for name, parameter in head.named_parameters():
+            with self.subTest(parameter=name):
+                self.assertIsNotNone(parameter.grad)
+                self.assertTrue(torch.isfinite(parameter.grad).all())
+
 
 class FrozenWavLMWrapperTest(unittest.TestCase):
     def test_wrapper_freezes_backbone_and_saves_head_only(self):
@@ -225,6 +253,41 @@ class FrozenWavLMWrapperTest(unittest.TestCase):
         self.assertTrue(state)
         self.assertTrue(all(not key.startswith("backbone.") for key in state))
         model.load_head_state_dict(state)
+
+    def test_wrapper_supports_alignment_head(self):
+        class FakeBackbone(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor(1.0))
+                self.config = types.SimpleNamespace(
+                    hidden_size=8, num_hidden_layers=2)
+
+            def forward(self, waveforms, attention_mask,
+                        output_hidden_states, return_dict):
+                base = waveforms[:, ::2].unsqueeze(-1).repeat(1, 1, 8)
+                return types.SimpleNamespace(
+                    hidden_states=tuple(base * self.weight + i
+                                        for i in range(3)))
+
+            def _get_feat_extract_output_lengths(self, lengths):
+                return torch.div(lengths + 1, 2, rounding_mode="floor")
+
+        backbone = FakeBackbone()
+
+        class FakeAutoModel:
+            @staticmethod
+            def from_pretrained(model_id):
+                return backbone
+
+        transformers = types.ModuleType("transformers")
+        transformers.AutoModel = FakeAutoModel
+        with mock.patch.dict(sys.modules, {"transformers": transformers}):
+            model = FrozenWavLMMatcher(
+                "fake/wavlm", projection_dim=4, head_type="align")
+        logits = model(
+            torch.randn(2, 12), torch.randn(2, 12),
+            torch.tensor([12, 8]), torch.tensor([10, 6]))
+        self.assertEqual(logits.shape, (2,))
 
 
 if __name__ == "__main__":

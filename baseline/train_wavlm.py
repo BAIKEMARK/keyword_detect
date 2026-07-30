@@ -22,6 +22,10 @@ def parse_args(argv=None):
     ap.add_argument("--train-zip", default=PATHS.train_zip)
     ap.add_argument("--train-csv", default=PATHS.train_csv)
     ap.add_argument("--projection-dim", type=int, default=128)
+    ap.add_argument(
+        "--head", choices=("symmetric", "align"), default="symmetric",
+        help="registered-audio matching head; align uses soft bidirectional frame alignment")
+    ap.add_argument("--alignment-temperature", type=float, default=0.1)
     ap.add_argument("--max-seconds", type=float, default=2.5)
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--bs", type=int, default=16)
@@ -104,6 +108,8 @@ def training_config(args, max_samples, train_pairs, amp_enabled, device):
     return {
         "model_id": args.model_id,
         "projection_dim": args.projection_dim,
+        "head_type": args.head,
+        "alignment_temperature": args.alignment_temperature,
         "train_csv": args.train_csv,
         "train_zip": args.train_zip,
         "train_pairs": train_pairs,
@@ -132,7 +138,8 @@ def _checkpoint_value(checkpoint, key):
 def validate_resume_checkpoint(checkpoint, config):
     path_keys = {"train_csv", "train_zip", "noise_dir"}
     checked_keys = (
-        "model_id", "projection_dim", "train_csv", "train_zip",
+        "model_id", "projection_dim", "head_type", "alignment_temperature",
+        "train_csv", "train_zip",
         "train_pairs", "max_samples", "batch_size", "learning_rate",
         "pos_weight", "noise_prob", "noise_snr_min", "noise_snr_max",
         "noise_dir", "seed",
@@ -194,6 +201,8 @@ def checkpoint_state(model, optimizer, scaler, config, device, epoch,
         "training_config": config,
         "model_id": config["model_id"],
         "projection_dim": config["projection_dim"],
+        "head_type": config["head_type"],
+        "alignment_temperature": config["alignment_temperature"],
         "train_csv": config["train_csv"],
         "train_zip": config["train_zip"],
         "train_pairs": config["train_pairs"],
@@ -271,6 +280,9 @@ def main():
     print(f"batch size: {args.bs}", flush=True)
     print(f"eval batch size: {args.eval_bs}", flush=True)
     print(f"learning rate: {args.lr}", flush=True)
+    print(f"head: {args.head}", flush=True)
+    if args.head == "align":
+        print(f"alignment temperature: {args.alignment_temperature}", flush=True)
     print(f"process id: {os.getpid()}", flush=True)
 
     all_pairs = load_pairs(args.train_csv, with_label=True)
@@ -325,7 +337,11 @@ def main():
         max_samples, args.eval_bs, args.workers, device)
 
     model = FrozenWavLMMatcher(
-        args.model_id, projection_dim=args.projection_dim).to(device)
+        args.model_id,
+        projection_dim=args.projection_dim,
+        head_type=args.head,
+        alignment_temperature=args.alignment_temperature,
+    ).to(device)
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     frozen = sum(p.numel() for p in model.parameters() if not p.requires_grad)
     print(f"params: trainable={trainable:,} frozen={frozen:,}", flush=True)

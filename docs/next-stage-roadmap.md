@@ -2,156 +2,153 @@
 
 更新时间：2026-07-28
 
-## 当前事实
+## 当前结论
 
-当前最佳线上分数为 `0.89071`：HuBERT Large + 音素 CTC + Temporal Adapter。
-第二名是 WavLM Large 的独立训练轨迹，线上 `0.89054`。两者只差 `0.00017`，
-因此不能把任一分支视为绝对支配模型，应优先挖掘互补性。
+当前线上最佳为 `0.90123`：WavLM Large 与 HuBERT Large 的音素 CTC
+Temporal Adapter 秩融合。最佳单模型 HuBERT Large 为 `0.89071`，融合取得
+`+0.01052`，说明两种底模的错误具有明显互补性。
 
-已验证的主要收益：
+距离约 `0.98` 仍差 `0.07877`。这个量级不能合理地寄希望于更多 epoch、固定
+seed 重跑或直接扩到全量。当前系统的结构性限制是：训练阶段只学习正确文本的
+CTC 转写概率，推理阶段只看目标文本的绝对 CTC 分数，没有显式学习“这段语音更像
+目标词，还是另一个词”，也没有使用注册音频。
 
-| 改动 | 已验证线上收益 | 结论 |
+已验证收益：
+
+| 改动 | 线上收益 | 结论 |
 |---|---:|---|
-| WavLM + 注册文本字符 CTC | `+0.15125` | 强语音表征加文本先验是路线基础 |
-| 字符 CTC 改音素 CTC | `+0.02836` | 音素目标更贴近英文关键词判别 |
-| Temporal Adapter | `+0.03005` | 冻结 encoder 后仍需时序建模 |
+| WavLM + 注册文本字符 CTC | `+0.15125` | 强表征、文本先验和任务重构是基础 |
+| 字符改音素 CTC | `+0.02836` | 音素目标更适合英文关键词判别 |
+| Temporal Adapter | `+0.03005` | 冻结 encoder 后仍需局部时序建模 |
 | WavLM Large 替换 Base+ | `+0.01611` | 更强底模有明确收益 |
-| HuBERT Large | `+0.00516` | 不同预训练目标仍有额外信息 |
-| 全量数据和单纯增加 epoch | 千分位到半百分点 | 不是当前优先级 |
+| WavLM Large + HuBERT Large 融合 | `+0.01052` | 跨底模互补仍有价值 |
+| 全量数据或单纯增加 epoch | 千分位到半百分点 | 不是当前突破口 |
 
-## 实验纪律
+## 新底模判断
 
-- 新路线默认：256 条 smoke test 后，使用 `--subset 100000` 的 CTC 横测。
-- 帧级 matcher 以 `50000 pair` 作为同量级对照。
-- eval 只能推理和最终提交，不能参与训练、选 checkpoint、选融合权重或调参。
-- 每日最多 3 次提交：优先提交 Dev 明确优于单模型的方案。
-- 全量 `1,000,000 utterance` 仅在小规模路线明确胜出且单独确认后运行。
-- 新训练必须带显式 `--seed`；同一 checkpoint 恢复训练必须保持 seed 不变。
+语音领域没有一个已经可以断言会像 DINOv3 一样，在本赛题中无条件跨越式提分的
+公开模型。语音识别模型的 WER、通用音频模型的分类成绩和短关键词的似音判别能力
+不是同一个指标。候选底模必须保留细粒度帧特征，并且只能作为冻结特征提取器，
+最终判决仍由自研模型完成。
 
-## P0：立即执行
+| 优先级 | 候选 | 值得测的原因 | 风险与结论 |
+|---:|---|---|---|
+| 1 | `facebook/w2v-bert-2.0` | 约 6 亿参数、超大规模多语种自监督语音预训练；在公开可用 encoder 中最接近“新一代通用语音表征底座” | 不是英语专用，且输入是声学特征而非当前 raw-waveform 接口；先做 100K 严格横测 |
+| 2 | NVIDIA Parakeet 0.6B encoder | 强英语监督 ASR encoder，可能比纯自监督模型更直接编码音素和单词边界 | NeMo 接入工作量较大；只能冻结 encoder 并训练自研头，不能直接拿其转写结果判决 |
+| 3 | `openai/whisper-large-v3` encoder | 大规模弱监督 ASR 训练，英语、口音和噪声鲁棒性强，可能与 WavLM/HuBERT 互补 | 不能使用 decoder 直接判决；输入前端和当前代码不同，模型更重，未必优于专门的帧级 SSL encoder |
+| 4 | XEUS encoder | 约 5.8 亿参数、超大规模跨语言 SSL，适合作为 WavLM/HuBERT 之外的表征多样性候选 | 英语不是唯一优化目标，生态和部署成熟度低于 Transformers 主线；前三项无收益后再做 |
+| 5 | MMS/XLS-R/Data2Vec Audio/UniSpeech-SAT | 都是合法的公开帧级 encoder，可提供额外预训练目标 | 代际或任务优势不够明确，不优先逐个穷举 |
 
-### 1. WavLM Large + HuBERT Large 秩融合
+暂不投入 BEATs/EAT 等通用音频事件模型。它们擅长声音事件和场景语义，时频 patch
+通常比音素边界粗，不是当前短词辨音的首选。也不投入音频 LLM、完整 Whisper
+decoder 或云端 ASR API：它们的生成结果既不符合“开源模型只作特征提取”的当前
+合规边界，也不适合作为 10 万条短音频的轻量帧级前端。
 
-状态：代码已支持，优先级最高。
+## P0：先攻打分目标
 
-- 在 dev 的 seen/unseen 内分别转换为 percentile rank。
-- 搜索全局 HuBERT 权重，目标为宏平均 AUC。
-- 将固定权重应用到 eval，两份 eval CSV 仅作为无标签输入。
-- 只有融合 Dev 高于两个单模型时才占用当天第三次提交。
+### 1. CTC 解码信息诊断
 
-预期：两条线上分数接近但底模不同，通常比继续训练任一单模型更有希望获得
-千分位到百分点收益。
+不重新训练 encoder，先从 E015/E016 的现有输出中同时导出：
 
-### 2. 三模型融合是否值得
+- 目标注册词的长度归一化 CTC 分数 `s_target`；
+- query 的 greedy CTC 音素序列；
+- greedy 序列与注册词音素序列的归一化编辑相似度；
+- `s_target - s_greedy` 似然差；
+- blank 比例、解码置信度、目标/解码长度差和音频时长。
 
-候选为 HuBERT E015、WavLM E016、WavLM E014。E014 较弱但来自不同噪声随机
-轨迹，可能仍提供排序互补性。
+先分别计算每个特征的 seen/unseen AUC，再用官方训练 pair 训练一个很小的
+logistic/MLP 判别头，在 dev 上只做一次验证。eval 仅应用固定模型。这一步能直接
+判断：当前 CTC 头是否已经识别出 query 的音素，只是绝对分数没有把信息利用好。
 
-- 先完成双模型融合。
-- 若双模型 Dev 提升，扩展为三模型网格搜索；权重只在 dev 选择。
-- 若 E014 加入后 Dev 不提升，立即剔除，不提交。
+成功标准：单个 Large 分支 Dev Mean 至少提升 `0.01`，或与现有融合后提升
+`0.005`。若达不到，停止在分数校准上继续调参。
 
-## P1：高价值新路线
+### 2. 音素难负样本挖掘
 
-### 3. 可控 seed ensemble
+训练 CSV 已给出 `query_txt`，因此可以在训练集内合法构造难负样本：
 
-目的：把当前偶然的 PID 噪声差异改为可追溯的模型多样性。
+1. 把全部训练词转换成无重音 ARPAbet 音素序列。
+2. 按归一化音素编辑距离，为每个真实 query 词检索 5 至 20 个不同但最接近的词。
+3. 保留官方负 pair，并额外加入这些似音词作为错误 enroll 文本。
+4. 第一轮按音素距离挖掘；第二轮用当前模型在训练集上的高分误报做在线 hard mining。
+5. 单独报告随机负样本 AUC、近音负样本 AUC 和总体 seen/unseen AUC。
 
-- 固定所有结构和数据规模，仅改 `--seed 43`、`--seed 44`。
-- 每个分支保存最佳 checkpoint，并先看 dev 是否与现有模型互补。
-- 不需要每个 seed 都单独提交；优先将其加入 Dev 融合。
+不要只把难负样本塞进普通 CTC 转写。CTC 转写损失只知道“正确文本是什么”，并不
+直接惩罚某个错误目标分数过高。应增加 pairwise margin：
 
-这是低风险的集成方法。它不会改变赛规边界：冻结开源 encoder，训练的仍是自研
-Temporal CTC 头。
+```text
+L = L_ctc(true_text)
+    + lambda * softplus(margin + score(hard_negative) - score(true_text))
+```
 
-### 4. 更强的时序 Adapter
+推理时使用目标分数相对近音竞争词的差值，而不是只用目标绝对分数。该目标直接
+对应 `hi/haier` 一类误唤醒，比继续加深两层 Temporal Adapter 更有潜力。
 
-当前 Adapter 是两层 kernel=5 的深度可分离卷积。可进行单因素小网格：
+### 3. 训练自研关键词判别头
 
-- Adapter dim：256 -> 384。
-- Adapter 层数：2 -> 4。
-- 时间卷积 dilation：`1, 2, 4`，扩大感受野以覆盖连读和音素过渡。
+最终头只接收自研 CTC/匹配特征，使用训练 pair 的 `label` 监督：
 
-评价规则：保持 WavLM Large、100K、音素 CTC、增强不变。只有 Dev 至少高于
-WavLM E016 `0.8880` 且 unseen 不下降时，才进入融合池。
+- CTC 目标分数、greedy 编辑相似度和近音词 margin；
+- WavLM/HuBERT 两分支分数及差异；
+- 后续注册音频匹配分数；
+- 仅用于校准的长度和置信度特征。
 
-### 5. 字符 + 音素多任务 CTC
+优先 logistic regression 或两层 MLP，不先上复杂 GBDT。模型容量不是瓶颈，避免
+在 1 万条 dev 上反复选特征造成泄漏。训练集拟合，dev 只选一次版本和融合权重。
 
-已有 Base+ 字符/音素后验融合带来过收益，说明两种标签有互补性。下一步不是重跑
-两个完全独立的弱模型，而是在同一个 Large encoder 后训练共享 Temporal Adapter，
-接两个自研 CTC head：一个字符 head，一个音素 head。
+## P1：补回注册音频
 
-- 训练损失为字符 CTC 与音素 CTC 的加权和。
-- 推理时对 enroll text 同时计算两条分数，在 dev 中搜索融合权重。
-- 重点观察 unseen，因为字符拼写信息可能补充音素词典的发音归纳。
+当前最佳系统只使用 `enroll_txt + query audio`，完全丢掉了官方提供的 enroll
+audio。旧 Base+ matcher unseen 接近随机，只能证明旧全局匹配头失败，不能证明
+注册音频没有价值。
 
-### 6. CTC 难负样本和似音词判别
+新的 matcher 应使用 WavLM/HuBERT Large 冻结逐帧特征：
 
-赛题明确包含 `hi` / `haier` 类似音误唤醒，而当前 CTC 只优化“目标文本的绝对
-对数概率”。可建立额外的自研判别头：
+- enroll/query 帧之间做带 mask 的 cross-attention、soft-DTW 或单调软对齐；
+- 加入音素序列作为对齐条件，而不是无条件比较两段全局 embedding；
+- 训练 batch 由正 pair、随机负 pair、音素近邻 hard negative 共同组成；
+- 使用 supervised contrastive/triplet margin，让真实同词对高于近音异词对；
+- 最终与 CTC 判别分支融合，不单独替代当前 `0.90123`。
 
-- 用 CMUdict/g2p 音素编辑距离，为每个训练关键词检索相似但不同的文本。
-- 构造目标文本与似音文本的 hard negative 对。
-- 输入目标 CTC 分数、相似词 CTC 分数差、文本音素长度等特征，训练二分类或
-  pairwise ranking head。
+这是比单纯再换一个底模更高上限的路线，因为文本 CTC 和注册音频条件匹配的错误
+来源不同。先用 50K pair；只有 Dev 明确提升才讨论 500K 全量。
 
-这是直接针对比赛误唤醒痛点的路线。先在训练/dev 内闭环验证，不读取 eval 的
-隐藏 query 文本。
+## P2：底模横测
 
-### 7. 注册音频分支：重做音频匹配器
+先为代码增加统一 backbone adapter，隔离三种输入/长度接口：raw waveform
+Transformers、Whisper log-Mel、NeMo acoustic encoder。所有横测保持相同：
 
-当前最佳 CTC 分支使用注册文本和 query 音频，没有直接利用注册音频。旧 Base+
-matcher 的 unseen 很低，但它使用的模型容量和训练目标都较弱，不能证明注册音频
-无价值。
+- 256 条 smoke；
+- 100,000 utterance；
+- 音素 Temporal Adapter，2 层、dim 256；
+- batch 按显存调整，但有效训练样本和 epoch 相同；
+- encoder 全冻结，DEMAND 配置不变；
+- 同时比较单模型 Dev、与 E015/E016 的融合增益、峰值显存和推理速度。
 
-更合理的重做方式：
+顺序为 W2v-BERT 2.0、Parakeet encoder、Whisper Large-v3 encoder。新模型即使单独
+只持平，只要能使融合 Dev 提升 `0.005` 也可保留。不要在 100K 未胜出前跑全量。
 
-- 冻结 WavLM Large 或 HuBERT Large，提取逐帧表征。
-- 用带 mask 的对称 soft alignment / cross-attention 对齐 enroll 与 query。
-- 从上述音素近邻词中挖 hard negative，而不是随机负样本。
-- 将 audio-match posterior 与 CTC posterior 做 Dev 监督融合。
+## P3：后续王牌
 
-这是高上限路线，因为它补充了文本 CTC 无法表达的说话人、发音和录音条件信息。
-但实现量大，优先级在 Large 融合之后。
+按潜力排序：
 
-## P2：条件性路线
+1. 音素 hard negative + CTC 似然比/判别头。
+2. Large 注册音频条件 matcher + hard negative。
+3. W2v-BERT 2.0 / Parakeet encoder 新底模及跨底模融合。
+4. 字符、音素和音节/发音变体多任务头。
+5. 顶层少量 LoRA/解冻；须先向主办方确认合规边界。
+6. MUSAN 人声干扰、RIR、codec、带宽和速度扰动。
+7. 外部英语带转写语料训练自研 CTC 头。
 
-### 8. 域增强与课程训练
+固定 seed ensemble、三模型同架构融合、继续增加 epoch、Adapter dim/层数小网格均
+降为低优先级。它们可能带来千分位，但不具备填补 0.90 到 0.98 差距的结构性潜力。
 
-当前仅使用 DEMAND 噪声，概率 0.5，SNR `[-10, 5]` dB。可补充：
+## 执行顺序
 
-- MUSAN/AudioSet 开源人声、音乐、环境噪声。
-- RIR 混响、带宽限制、轻微速度扰动。
-- 从 clean/高 SNR 逐步到低 SNR 的课程训练。
-
-目的不是制造更多随机噪声，而是覆盖测试中的真实人声干扰和远场声学条件。使用
-外部数据前必须在 README 中记录来源与许可证。
-
-### 9. 外部带文本英语语音数据
-
-可用 LibriSpeech、Common Voice 等开源带转写语料，训练自研 CTC head 或多任务
-head，重点服务 unseen 关键词。此路线成本较高，先在 100K 内部数据上确认模型
-结构上限后再启动。
-
-### 10. 参数高效微调
-
-可尝试只训练 WavLM/HuBERT 顶部少数层的 LoRA/Adapter，而不是直接微调整个
-开源 encoder。它可能提升领域适应性，但赛规对“开源权重仅用于特征提取”的边界
-需要先向主办方确认；未确认前保持 encoder 冻结。
-
-## 当前不优先
-
-- 直接跑全量训练：历史收益远小于强底模和时序结构收益。
-- 将已经见顶的 HuBERT/WavLM 配置继续堆到更高 epoch。
-- 只用高斯噪声替换 DEMAND，或只改 `pos_weight`。
-- 使用 eval 样本、eval 文本假设或线上成绩反复调融合权重。
-
-## 推荐顺序
-
-1. 双模型 Dev 秩融合并提交。
-2. 若融合有效，尝试包含 WavLM E014 的三模型 Dev 融合。
-3. 固定新 seed 训练一个 WavLM Large 分支，作为可控 ensemble 候选。
-4. Temporal Adapter 的 dilation/深度单因素对照。
-5. 音素 hard negative 判别分支。
-6. Large 注册音频 matcher 与 CTC 的监督融合。
-7. 只有上述至少一条路线在 100K 明确胜出，才讨论全量训练。
+1. 实现 CTC greedy/似然差特征导出，先用现有 checkpoint 做零重训诊断。
+2. 实现训练词表音素近邻挖掘和训练集判别头，在 dev 验证。
+3. 将 hard-negative margin 加入音素 CTC 训练，100K 横测。
+4. 并行准备 W2v-BERT 2.0 backbone adapter，完成 100K 横测。
+5. 重做 Large 注册音频 matcher，使用 50K pair + hard negatives。
+6. 只把明确提升的分支加入现有 WavLM/HuBERT 融合池。
+7. 某条路线在小规模至少提升一个百分点后，再单独确认是否跑全量。

@@ -66,6 +66,12 @@ def main():
     checkpoint = torch.load(args.ckpt, map_location="cpu", weights_only=False)
     model_id = args.model_id or checkpoint["model_id"]
     projection_dim = checkpoint["projection_dim"]
+    training_config = checkpoint.get("training_config", {})
+    head_type = training_config.get(
+        "head_type", checkpoint.get("head_type", "symmetric"))
+    alignment_temperature = float(training_config.get(
+        "alignment_temperature",
+        checkpoint.get("alignment_temperature", 0.1)))
     max_samples = checkpoint["max_samples"]
     print(f"device: {device}")
     print(f"workers: {args.workers}")
@@ -73,7 +79,11 @@ def main():
     print(f"loaded {args.ckpt} (dev mean AUC={checkpoint.get('auc')})")
 
     model = FrozenWavLMMatcher(
-        model_id, projection_dim=projection_dim).to(device)
+        model_id,
+        projection_dim=projection_dim,
+        head_type=head_type,
+        alignment_temperature=alignment_temperature,
+    ).to(device)
     model.load_head_state_dict(checkpoint["head"])
 
     rows = predict(

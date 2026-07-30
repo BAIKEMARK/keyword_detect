@@ -7,17 +7,22 @@ MODEL_ROOT="${2:-/mnt/workspace/models}"
 usage() {
   cat <<'EOF'
 Usage:
-  bash scripts/download_speech_backbones.sh [all|wavlm-large|hubert-large] [model_root]
+  bash scripts/download_speech_backbones.sh [all|new|wavlm-large|hubert-large|w2v-bert-2|parakeet|whisper-large-v3] [model_root]
 
 Examples:
   bash scripts/download_speech_backbones.sh all
+  bash scripts/download_speech_backbones.sh new /mnt/workspace/models
   bash scripts/download_speech_backbones.sh wavlm-large /mnt/workspace/models
 EOF
 }
 
 if [[ "${MODEL_NAME}" != "all" \
+      && "${MODEL_NAME}" != "new" \
       && "${MODEL_NAME}" != "wavlm-large" \
-      && "${MODEL_NAME}" != "hubert-large" ]]; then
+      && "${MODEL_NAME}" != "hubert-large" \
+      && "${MODEL_NAME}" != "w2v-bert-2" \
+      && "${MODEL_NAME}" != "parakeet" \
+      && "${MODEL_NAME}" != "whisper-large-v3" ]]; then
   usage >&2
   exit 2
 fi
@@ -35,15 +40,17 @@ mkdir -p "${MODEL_ROOT}"
 has_weights() {
   local directory="$1"
   local weight
-  weight="$(find "${directory}" -maxdepth 2 -type f \
-    \( -name '*.safetensors' -o -name 'pytorch_model*.bin' \) \
+  weight="$(find "${directory}" -maxdepth 3 -type f \
+    \( -name '*.safetensors' -o -name 'pytorch_model*.bin' \
+       -o -name '*.nemo' -o -name '*.ckpt' -o -name '*.pt' \) \
     -print -quit 2>/dev/null || true)"
-  [[ -s "${directory}/config.json" && -n "${weight}" ]]
+  [[ -s "${directory}/config.json" && -n "${weight}" ]] || [[ -n "${weight}" ]]
 }
 
 download_model() {
   local repo_id="$1"
   local local_name="$2"
+  local verify_kind="${3:-transformers}"
   local output_dir="${MODEL_ROOT}/${local_name}"
 
   if has_weights "${output_dir}"; then
@@ -59,6 +66,11 @@ download_model() {
   if ! has_weights "${output_dir}"; then
     echo "incomplete model directory: ${output_dir}" >&2
     exit 1
+  fi
+
+  if [[ "${verify_kind}" == "files" ]]; then
+    echo "verified: ${output_dir} model files present"
+    return
   fi
 
   python3 - "${output_dir}" <<'PY'
@@ -81,11 +93,30 @@ case "${MODEL_NAME}" in
     download_model "microsoft/wavlm-large" "wavlm-large"
     download_model "facebook/hubert-large-ll60k" "hubert-large-ll60k"
     ;;
+  new)
+    download_model "${W2V_BERT_REPO:-facebook/w2v-bert-2.0}" \
+      "w2v-bert-2"
+    download_model "${PARAKEET_REPO:-nvidia/parakeet-tdt-0.6b-v3}" \
+      "parakeet-tdt-0.6b-v3" files
+    download_model "${WHISPER_REPO:-openai/whisper-large-v3}" \
+      "whisper-large-v3"
+    ;;
   wavlm-large)
     download_model "microsoft/wavlm-large" "wavlm-large"
     ;;
   hubert-large)
     download_model "facebook/hubert-large-ll60k" "hubert-large-ll60k"
+    ;;
+  w2v-bert-2)
+    download_model "${W2V_BERT_REPO:-facebook/w2v-bert-2.0}" "w2v-bert-2"
+    ;;
+  parakeet)
+    download_model "${PARAKEET_REPO:-nvidia/parakeet-tdt-0.6b-v3}" \
+      "parakeet-tdt-0.6b-v3" files
+    ;;
+  whisper-large-v3)
+    download_model "${WHISPER_REPO:-openai/whisper-large-v3}" \
+      "whisper-large-v3"
     ;;
 esac
 
@@ -94,3 +125,9 @@ echo "done. Use these local paths with --model-id:"
   && echo "  ${MODEL_ROOT}/wavlm-large"
 [[ "${MODEL_NAME}" == "all" || "${MODEL_NAME}" == "hubert-large" ]] \
   && echo "  ${MODEL_ROOT}/hubert-large-ll60k"
+[[ "${MODEL_NAME}" == "new" || "${MODEL_NAME}" == "w2v-bert-2" ]] \
+  && echo "  ${MODEL_ROOT}/w2v-bert-2"
+[[ "${MODEL_NAME}" == "new" || "${MODEL_NAME}" == "parakeet" ]] \
+  && echo "  ${MODEL_ROOT}/parakeet-tdt-0.6b-v3"
+[[ "${MODEL_NAME}" == "new" || "${MODEL_NAME}" == "whisper-large-v3" ]] \
+  && echo "  ${MODEL_ROOT}/whisper-large-v3"

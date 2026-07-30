@@ -150,6 +150,32 @@ checkpoint 会校验模型、投影维度、数据路径、pair 数、batch size
 只重新运行尚未完成的评估，不会重复训练整个 epoch。当前阶段不要直接运行上面的
 全量命令，先用 `--subset 50000` 做路线筛选。
 
+### Large 注册音频对齐头
+
+旧 matcher 默认使用 `--head symmetric`。新 `align` 头在冻结 encoder 的逐帧
+特征上做双向 soft frame alignment，保留注册音频和 query 音频的时序信息；它是
+独立实验，不会改变旧 checkpoint 的加载方式。先用 50K pair、较小 batch 做
+WavLM/HuBERT Large 横测：
+
+```bash
+python3 -u baseline/train_wavlm.py \
+  --model-id /mnt/workspace/models/hubert-large-ll60k \
+  --head align \
+  --alignment-temperature 0.1 \
+  --subset 50000 \
+  --epochs 3 \
+  --bs 8 \
+  --eval-bs 8 \
+  --workers 8 \
+  --device cuda \
+  --noise-prob 0.5 \
+  --noise-dir noise/DEMAND_16k/wav \
+  --out baseline/checkpoints/hubert_large_align_50k_e3.pt
+```
+
+如果 dev 明确高于随机匹配基线，再将该分支与当前 CTC 融合；不要直接用它替换
+`0.90123` 主提交。
+
 ## Temporal CTC Adapter 小规模实验
 
 默认 `--head linear` 与现有 checkpoint 完全兼容。时序实验在冻结 encoder 后增加
@@ -201,6 +227,24 @@ bash scripts/download_speech_backbones.sh hubert-large
 /mnt/workspace/models/hubert-large-ll60k
 ```
 
+下载后续横测的三个候选底模：
+
+```bash
+bash scripts/download_speech_backbones.sh new /mnt/workspace/models
+```
+
+对应路径：
+
+```text
+/mnt/workspace/models/w2v-bert-2
+/mnt/workspace/models/parakeet-tdt-0.6b-v3
+/mnt/workspace/models/whisper-large-v3
+```
+
+Parakeet 的 ModelScope 镜像名可能随仓库同步变化；脚本支持通过
+`PARAKEET_REPO=组织名/模型名` 覆盖。脚本会跳过已完整下载的目录，不会把模型写入
+临时目录。
+
 下载完成后可开启离线模式：
 
 ```bash
@@ -209,6 +253,28 @@ export TRANSFORMERS_OFFLINE=1
 ```
 
 Large 模型只用于后续 10 万 utterance 横测，当前不启动全量训练。
+
+## CTC greedy/似然差零重训诊断
+
+该诊断复用已有 checkpoint，不重新训练。它额外导出 greedy 音素序列、目标 CTC
+分数、greedy 路径分数、二者似然差、编辑相似度、blank 比例和帧置信度，并分别
+报告 seen/unseen AUC：
+
+```bash
+mkdir -p scores
+
+python3 -u baseline/diagnose_wavlm_ctc.py \
+  --ckpt baseline/checkpoints/hubert_large_phoneme_temporal_100k_e3.pt \
+  --model-id /mnt/workspace/models/hubert-large-ll60k \
+  --bs 256 \
+  --workers 8 \
+  --device cuda \
+  --out scores/diagnostic_hubert_large.csv
+```
+
+如果 `edit_similarity` 或 `likelihood_margin` 明显高于 `target_score`，说明模型
+已有辨音信息，下一步应训练自研判别头和 hard-negative margin；若所有特征都接近
+随机，再优先横测新底模。
 
 ## 字符 CTC：使用注册文本处理 unseen
 

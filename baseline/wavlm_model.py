@@ -81,9 +81,70 @@ class SymmetricFrameMatchHead(nn.Module):
         return self.classifier(features).squeeze(-1)
 
 
+class AlignedFrameMatchHead(SymmetricFrameMatchHead):
+    """Soft bidirectional frame alignment for the registered audio branch."""
+
+    def __init__(self, hidden_size: int, num_hidden_states: int,
+                 projection_dim: int = 128,
+                 temperature: float = 0.1):
+        if temperature <= 0:
+            raise ValueError("temperature must be positive")
+        super().__init__(
+            hidden_size, num_hidden_states, projection_dim=projection_dim)
+        self.log_temperature = nn.Parameter(
+            torch.tensor(float(temperature)).log())
+        self.classifier = nn.Sequential(
+            nn.Linear(5, 32),
+            nn.GELU(),
+            nn.Linear(32, 1),
+        )
+
+    @staticmethod
+    def _masked_mean_1d(values: torch.Tensor, mask: torch.Tensor):
+        values = values.masked_fill(~mask, 0.0)
+        return values.sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+
+    def forward(self, hidden_states: Sequence[torch.Tensor],
+                enroll_lengths: torch.Tensor, query_lengths: torch.Tensor):
+        combined = self._combine_layers(hidden_states)
+        projected = F.normalize(self.projection(combined), dim=-1)
+        batch_size = enroll_lengths.shape[0]
+        if projected.shape[0] != batch_size * 2:
+            raise ValueError("hidden-state batch must contain enroll then query")
+        enroll, query = projected[:batch_size], projected[batch_size:]
+        e_mask = length_mask(enroll_lengths, enroll.shape[1])
+        q_mask = length_mask(query_lengths, query.shape[1])
+        similarity = torch.bmm(enroll, query.transpose(1, 2))
+        valid_pairs = e_mask[:, :, None] & q_mask[:, None, :]
+        temperature = self.log_temperature.exp().clamp(0.03, 1.0)
+        masked_similarity = similarity.masked_fill(~valid_pairs, -1e4)
+
+        e_attention = torch.softmax(masked_similarity / temperature, dim=2)
+        q_attention = torch.softmax(
+            masked_similarity.transpose(1, 2) / temperature, dim=2)
+        e_to_q = self._masked_mean_1d(
+            (e_attention * similarity).sum(dim=2), e_mask)
+        q_to_e = self._masked_mean_1d(
+            (q_attention * similarity.transpose(1, 2)).sum(dim=2), q_mask)
+        global_cosine = (
+            F.normalize(self._masked_mean(enroll, e_mask), dim=-1)
+            * F.normalize(self._masked_mean(query, q_mask), dim=-1)
+        ).sum(dim=-1)
+        mean_score = 0.5 * (e_to_q + q_to_e)
+        features = torch.stack([
+            mean_score,
+            torch.abs(e_to_q - q_to_e),
+            global_cosine,
+            torch.minimum(e_to_q, q_to_e),
+            torch.maximum(e_to_q, q_to_e),
+        ], dim=-1)
+        return self.classifier(features).squeeze(-1)
+
+
 class FrozenWavLMMatcher(nn.Module):
     def __init__(self, model_id: str = "microsoft/wavlm-base-plus",
-                 projection_dim: int = 128):
+                 projection_dim: int = 128, head_type: str = "symmetric",
+                 alignment_temperature: float = 0.1):
         super().__init__()
         try:
             from transformers import AutoModel
@@ -93,6 +154,7 @@ class FrozenWavLMMatcher(nn.Module):
                 from exc
 
         self.model_id = model_id
+        self.head_type = head_type
         try:
             self.backbone = AutoModel.from_pretrained(model_id)
         except Exception as exc:
@@ -104,11 +166,20 @@ class FrozenWavLMMatcher(nn.Module):
         self.backbone.eval()
 
         config = self.backbone.config
-        self.head = SymmetricFrameMatchHead(
-            hidden_size=config.hidden_size,
-            num_hidden_states=config.num_hidden_layers + 1,
-            projection_dim=projection_dim,
-        )
+        head_class = {
+            "symmetric": SymmetricFrameMatchHead,
+            "align": AlignedFrameMatchHead,
+        }.get(head_type)
+        if head_class is None:
+            raise ValueError(f"unsupported matcher head type: {head_type!r}")
+        head_kwargs = {
+            "hidden_size": config.hidden_size,
+            "num_hidden_states": config.num_hidden_layers + 1,
+            "projection_dim": projection_dim,
+        }
+        if head_type == "align":
+            head_kwargs["temperature"] = alignment_temperature
+        self.head = head_class(**head_kwargs)
 
     def train(self, mode: bool = True):
         super().train(mode)

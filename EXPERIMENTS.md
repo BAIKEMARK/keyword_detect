@@ -30,28 +30,30 @@
 | E012 | 已完成 | 冻结 WavLM Base+ 音素 CTC + Temporal Adapter，batch size 128 | 100,000 utterance | 0.8725 | 0.8723 | **0.8724** | **0.86944** | 3 | `baseline/checkpoints/wavlm_base_plus_phoneme_temporal_100k_e3.pt` | `7fc28b7` |
 | E013 | 历史线上最佳 | 冻结 WavLM Base+ 音素 CTC + Temporal Adapter，batch size 256，15 epoch | 100,000 utterance | 0.8773 | 0.8710 | **0.8742** | **0.87676** | 13 | `baseline/checkpoints/wavlm_base_plus_phoneme_temporal_100k_bs256_e15.pt` | `7fc28b7` |
 | E014 | 历史线上最佳 | 冻结 WavLM Large 音素 CTC + Temporal Adapter，batch size 128 | 100,000 utterance | 0.8893 | 0.8802 | **0.8847** | **0.88555** | 1 | `baseline/checkpoints/wavlm_large_phoneme_temporal_100k_e3.pt` | `7fc28b7` |
-| E015 | 当前线上最佳 | 冻结 HuBERT Large 音素 CTC + Temporal Adapter，batch size 128 | 100,000 utterance | 0.8930 | 0.8803 | **0.8866** | **0.89071** | 10 | `baseline/checkpoints/hubert_large_phoneme_temporal_100k_e3.pt` | `7fc28b7` |
+| E015 | 已完成，融合分支 | 冻结 HuBERT Large 音素 CTC + Temporal Adapter，batch size 128 | 100,000 utterance | 0.8930 | 0.8803 | **0.8866** | **0.89071** | 10 | `baseline/checkpoints/hubert_large_phoneme_temporal_100k_e3.pt` | `7fc28b7` |
 | E016 | 已完成 | 冻结 WavLM Large 音素 CTC + Temporal Adapter，从零重跑 10 epoch | 100,000 utterance | 0.8900 | 0.8860 | **0.8880** | **0.89054** | 10 | `baseline/checkpoints/wavlm_large_phoneme_temporal_100k_e10.pt` | `7fc28b7` |
+| E017 | 当前线上最佳 | WavLM Large + HuBERT Large CTC 秩融合 | 100,000 utterance 两分支 | - | - | - | **0.90123** | - | E015 + E016 | `c3f1b5c` |
 
 ## 线上提交记录
 
-以下表格按比赛平台返回结果原样记录，当前最高分为 `0.89071`。
+以下表格按比赛平台返回结果原样记录，当前最高分为 `0.90123`。
 
 | ID | 状态 | 评分 | 提交文件名 | 提交者 | 提交时间 |
 |---:|---|---:|---|---|---|
-| 1 | 返回分数 | **0.89054** | `submission_wavlm_large_phoneme_temporal_100k_e10_best_epoch10.csv` | Mark | 2026-07-28 10:37:04 |
-| 2 | 返回分数 | **0.89071** | `submission_hubert_large_phoneme_temporal_100k_best_epoch10.csv` | Mark | 2026-07-28 10:34:29 |
-| 3 | 返回分数 | 0.88555 | `submission_wavlm_large_phoneme_temporal_100k_best_epoch1.csv` | Mark | 2026-07-27 20:23:18 |
-| 4 | 返回分数 | 0.87676 | `submission_wavlm_base_plus_phoneme_temporal_100k_bs256_e15.csv` | Mark | 2026-07-27 12:21:32 |
-| 5 | 返回分数 | 0.86944 | `submission_wavlm_base_plus_phoneme_temporal_100k_e3.csv` | Mark | 2026-07-27 12:18:44 |
-| 6 | 返回分数 | 0.84446 | `submission_wavlm_phoneme_ctc_full_scratch_epoch8.csv` | Mark | 2026-07-20 22:36:13 |
-| 7 | 返回分数 | 0.84074 | `submission_wavlm_phoneme_ctc_full_epoch4.csv` | Mark | 2026-07-20 12:04:42 |
-| 8 | 返回分数 | 0.84335 | `submission_wavlm_phoneme_ctc_full_epoch2.csv` | Mark | 2026-07-18 23:13:29 |
-| 9 | 返回分数 | 0.84202 | `submission_wavlm_ctc_rank_fusion.csv` | Mark | 2026-07-18 09:04:18 |
-| 10 | 返回分数 | 0.83939 | `submission_wavlm_phoneme_ctc_100k.csv` | Mark | 2026-07-17 23:11:50 |
-| 11 | 返回分数 | 0.81103 | `submission_wavlm_char_ctc_100k.csv` | Mark | 2026-07-17 19:42:00 |
-| 12 | 返回分数 | 0.65978 | `submission_frame_noise_50k.csv` | Mark | 2026-07-13 20:20:18 |
-| 13 | 返回分数 | 0.62547 | `submission.csv` | Mark | 2026-07-11 20:38:53 |
+| 1 | 返回分数 | **0.90123** | `submission_wavlm_hubert_large_rank_fusion.csv` | Mark | 2026-07-28，具体时间未记录 |
+| 2 | 返回分数 | 0.89054 | `submission_wavlm_large_phoneme_temporal_100k_e10_best_epoch10.csv` | Mark | 2026-07-28 10:37:04 |
+| 3 | 返回分数 | 0.89071 | `submission_hubert_large_phoneme_temporal_100k_best_epoch10.csv` | Mark | 2026-07-28 10:34:29 |
+| 4 | 返回分数 | 0.88555 | `submission_wavlm_large_phoneme_temporal_100k_best_epoch1.csv` | Mark | 2026-07-27 20:23:18 |
+| 5 | 返回分数 | 0.87676 | `submission_wavlm_base_plus_phoneme_temporal_100k_bs256_e15.csv` | Mark | 2026-07-27 12:21:32 |
+| 6 | 返回分数 | 0.86944 | `submission_wavlm_base_plus_phoneme_temporal_100k_e3.csv` | Mark | 2026-07-27 12:18:44 |
+| 7 | 返回分数 | 0.84446 | `submission_wavlm_phoneme_ctc_full_scratch_epoch8.csv` | Mark | 2026-07-20 22:36:13 |
+| 8 | 返回分数 | 0.84074 | `submission_wavlm_phoneme_ctc_full_epoch4.csv` | Mark | 2026-07-20 12:04:42 |
+| 9 | 返回分数 | 0.84335 | `submission_wavlm_phoneme_ctc_full_epoch2.csv` | Mark | 2026-07-18 23:13:29 |
+| 10 | 返回分数 | 0.84202 | `submission_wavlm_ctc_rank_fusion.csv` | Mark | 2026-07-18 09:04:18 |
+| 11 | 返回分数 | 0.83939 | `submission_wavlm_phoneme_ctc_100k.csv` | Mark | 2026-07-17 23:11:50 |
+| 12 | 返回分数 | 0.81103 | `submission_wavlm_char_ctc_100k.csv` | Mark | 2026-07-17 19:42:00 |
+| 13 | 返回分数 | 0.65978 | `submission_frame_noise_50k.csv` | Mark | 2026-07-13 20:20:18 |
+| 14 | 返回分数 | 0.62547 | `submission.csv` | Mark | 2026-07-11 20:38:53 |
 
 ## E001：帧级 CNN，padding mask 修复前
 
@@ -425,12 +427,13 @@ seed 改为显式、与 PID 无关的可控种子。线上得分 **`0.89054`**�
 | WavLM Large Temporal，100K/3 epoch | 同配置 WavLM Base+ Temporal | **`+0.01611`** | 严格单因素底模升级，Dev 和线上均确认有效 |
 | HuBERT Large Temporal，100K/15 epoch | WavLM Large Temporal E014 | `+0.00516` | 不同预训练目标带来额外收益，当前单模型最佳 |
 | WavLM Large Temporal 重跑，100K/10 epoch | WavLM Large Temporal E014 | `+0.00499` | 随机增强轨迹本身可带来可观差异，适合作为融合分支 |
+| WavLM Large + HuBERT Large 秩融合 | 最佳单模型 HuBERT E015 | **`+0.01052`** | 不同底模错误具有显著互补性，是目前除架构升级外最大的近期收益 |
 
-从官方 baseline `0.62547` 到当前最佳 `0.89071`，累计绝对提升为
-**`0.26524`**。收益主次已经明确：任务重构/强底模、音素监督和 Temporal
-Adapter 是三个主要台阶；数据扩容、分数融合和单纯增加 epoch 的收益明显更小。
-当前 WavLM 与 HuBERT 分数接近，下一步优先在 Dev 上验证两者的秩融合；不继续
-只增加当前模型的训练轮数，也不未经确认直接跑全量。
+从官方 baseline `0.62547` 到当前最佳 `0.90123`，累计绝对提升为
+**`0.27576`**。收益主次已经明确：任务重构/强底模、音素监督和 Temporal
+Adapter 是三个主要台阶；WavLM/HuBERT 的跨底模融合也获得了 `+0.01052`，说明
+错误互补性值得保留。继续增加当前模型的训练轮数、固定 seed 重跑和直接扩到全量
+都不足以解释到 `0.98` 的差距，下一阶段转向判别目标和难负样本。
 
 ## 后续记录模板
 
