@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import os
 import sys
 import tempfile
 import types
@@ -20,7 +21,7 @@ from ctc_data import (CTCScoreDataset, collate_ctc_scores,  # noqa: E402
                       load_ctc_training_examples)
 from ctc_score import ctc_log_probability, normalized_ctc_score  # noqa: E402
 from ctc_text import (CharacterVocabulary, PhonemeVocabulary,  # noqa: E402
-                      build_vocabulary, checkpoint_units,
+                      _configure_nltk_data, build_vocabulary, checkpoint_units,
                       required_ctc_frames, warm_vocabulary)
 from infer_wavlm_ctc import collect_scores  # noqa: E402
 from train_wavlm_ctc import (ctc_valid_mask,  # noqa: E402
@@ -56,6 +57,22 @@ class CharacterVocabularyTest(unittest.TestCase):
 
 
 class PhonemeVocabularyTest(unittest.TestCase):
+    def test_configures_persistent_nltk_data(self):
+        fake_nltk = types.SimpleNamespace(
+            data=types.SimpleNamespace(path=["/default/nltk_data"]))
+        with tempfile.TemporaryDirectory() as persistent_dir:
+            with (mock.patch("ctc_text._PERSISTENT_NLTK_DATA",
+                             Path(persistent_dir)),
+                  mock.patch.dict(os.environ,
+                                  {"NLTK_DATA": "/custom/nltk_data"}),
+                  mock.patch.dict(sys.modules, {"nltk": fake_nltk})):
+                _configure_nltk_data()
+                self.assertEqual(
+                    os.environ.get("NLTK_DATA"),
+                    f"/custom/nltk_data{os.pathsep}{persistent_dir}")
+                self.assertEqual(fake_nltk.data.path[:2], [
+                    "/custom/nltk_data", persistent_dir])
+
     def test_fixed_inventory_and_stress_removal(self):
         vocabulary = PhonemeVocabulary(
             converter=lambda text: ["HH", "AH0", " ", "L", "OW1", "'"])

@@ -4,6 +4,7 @@ import re
 import string
 import zipfile
 from functools import lru_cache
+from pathlib import Path
 from typing import Callable, Mapping, Optional, Protocol, Sequence
 
 import torch
@@ -20,6 +21,7 @@ _NLTK_SETUP = (
     "python3 -m nltk.downloader cmudict "
     "averaged_perceptron_tagger averaged_perceptron_tagger_eng"
 )
+_PERSISTENT_NLTK_DATA = Path("/mnt/workspace/nltk_data")
 
 
 class CTCVocabulary(Protocol):
@@ -39,6 +41,31 @@ def _normalize_keyword(text: str) -> str:
         raise ValueError(
             f"unsupported keyword characters: {unsupported!r} in {text!r}")
     return normalized
+
+
+def _configure_nltk_data():
+    """Make the persisted NLTK directory available before importing g2p_en."""
+    import os
+
+    configured = [
+        Path(path) for path in os.environ.get("NLTK_DATA", "").split(os.pathsep)
+        if path
+    ]
+    if (_PERSISTENT_NLTK_DATA.exists()
+            and _PERSISTENT_NLTK_DATA not in configured):
+        configured.append(_PERSISTENT_NLTK_DATA)
+    if not configured:
+        return
+
+    os.environ["NLTK_DATA"] = os.pathsep.join(str(path) for path in configured)
+    try:
+        import nltk
+    except ImportError:
+        return
+    for path in reversed(configured):
+        path = str(path)
+        if path not in nltk.data.path:
+            nltk.data.path.insert(0, path)
 
 
 class CharacterVocabulary:
@@ -78,6 +105,7 @@ class PhonemeVocabulary:
 
     @staticmethod
     def _load_g2p():
+        _configure_nltk_data()
         try:
             from g2p_en import G2p
         except ImportError as exc:
