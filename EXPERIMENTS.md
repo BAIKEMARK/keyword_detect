@@ -36,6 +36,7 @@
 | E018 | 诊断完成，淘汰替代打分 | Large CTC greedy、似然差和编辑相似度零重训诊断 | E015 + E016 | 0.8930 / 0.8900 | 0.8803 / 0.8860 | 0.8866 / 0.8880 | - | - | E015 + E016 | `7c1fe7b` |
 | E019 | 已完成，停止路线 | 冻结 HuBERT Large 注册音频 soft alignment matcher | 50,000 pair | 0.5182 | 0.4985 | 0.5083 | - | 1 | `baseline/checkpoints/hubert_large_align_50k_e3.pt` | `7c1fe7b` |
 | E020 | 已完成，待融合 | HuBERT Large 音素 CTC + Temporal Adapter + hard-negative margin，batch size 128，10 epoch | 100,000 utterance | 0.8960 | 0.8824 | **0.8892** | - | 8 | `baseline/checkpoints/hubert_large_phoneme_temporal_hardneg_100k_e10.pt` | `9f24b06` |
+| E021 | 当前线上最佳 | WavLM Large + HuBERT Large hard-negative CTC 秩融合 | 100,000 utterance 两分支 | 0.9051 | 0.8970 | **0.9010** | **0.90441** | - | E016 + E020 | `fuse_ctc_scores.py` |
 
 ## 线上提交记录
 
@@ -472,6 +473,11 @@ batch size 32，dev batch size 8，3 epoch，DEMAND 加噪概率 0.5。可训练
 提升 `0.0012`。hard-negative margin loss 从约 `0.96` 下降到 `0.43`，说明训练
 确实在压低近音目标分数。下一步先测试它替换原 HuBERT 分支后的 WavLM/HuBERT 秩融合，
 暂不提交单模型结果。
+
+线上实际提交 `submission_wavlm_hubert_large_hardneg_rank_fusion.csv` 得分
+`0.90441`，比原 WavLM Large + HuBERT Large 融合 `0.90123` 提升 `0.00318`。
+hard-negative 已验证有效，但仍不足以改变当前系统只依赖 query 音频和注册文本的
+信息瓶颈。
 
 ## 线上收益拆解
 
