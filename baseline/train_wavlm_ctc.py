@@ -19,12 +19,16 @@ from ctc_score import normalized_ctc_score
 from ctc_text import build_vocabulary, required_ctc_frames, warm_vocabulary
 from data import NoiseAugmenter
 from runtime import select_device, should_pin_memory
-from wavlm_ctc_model import FrozenWavLMCTC
+from wavlm_ctc_model import (BACKBONE_TYPES, FrozenWavLMCTC,
+                             resolve_backbone_type)
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-id", default="microsoft/wavlm-base-plus")
+    parser.add_argument(
+        "--backbone", choices=BACKBONE_TYPES, default="auto",
+        help="speech encoder interface; auto detects Transformers models")
     parser.add_argument("--units", choices=("char", "phoneme"), default="char")
     parser.add_argument(
         "--head", choices=("linear", "temporal"), default="linear")
@@ -171,6 +175,7 @@ def default_last_checkpoint_path(out_path):
 def training_config(args, max_samples, train_utterances, amp_enabled, device):
     return {
         "model_id": args.model_id,
+        "backbone_type": args.backbone,
         "units": args.units,
         "head_type": args.head,
         "adapter_dim": args.adapter_dim,
@@ -206,7 +211,8 @@ def validate_resume_checkpoint(checkpoint, config, vocabulary):
     expected["vocabulary"] = tuple(vocabulary.symbols)
     path_keys = {"train_csv", "train_zip", "noise_dir"}
     checked_keys = (
-        "model_id", "units", "head_type", "adapter_dim", "adapter_layers",
+        "model_id", "backbone_type", "units", "head_type", "adapter_dim",
+        "adapter_layers",
         "hard_negative_weight", "hard_negative_margin",
         "vocabulary", "train_csv", "train_zip",
         "train_utterances", "max_samples", "dropout", "batch_size",
@@ -271,6 +277,7 @@ def checkpoint_state(model, optimizer, scaler, config, vocabulary, device,
         "rng_state": capture_rng_state(device),
         "training_config": config,
         "model_id": config["model_id"],
+        "backbone_type": config["backbone_type"],
         "units": config["units"],
         "head_type": config["head_type"],
         "adapter_dim": config["adapter_dim"],
@@ -304,8 +311,6 @@ def evaluate(model, loader, device, amp_enabled, blank_id):
     scores, labels = [], []
     for batch in loader:
         waveforms, sample_lengths, targets, target_lengths, target, pair_ids = batch
-        waveforms = _move(waveforms, device)
-        sample_lengths = _move(sample_lengths, device)
         targets = _move(targets, device)
         target_lengths = _move(target_lengths, device)
         with torch.autocast(
@@ -345,6 +350,7 @@ def main():
             "must be non-negative")
     if args.hard_negative_weight > 0 and args.units != "phoneme":
         raise ValueError("hard-negative training currently requires phoneme units")
+    args.backbone = resolve_backbone_type(args.model_id, args.backbone)
 
     for description, path in (
             ("training CSV", args.train_csv),
@@ -383,6 +389,7 @@ def main():
     print(f"device: {device}", flush=True)
     print(f"workers: {args.workers}", flush=True)
     print(f"model: {args.model_id} (frozen)", flush=True)
+    print(f"backbone: {args.backbone}", flush=True)
     print(f"units: {args.units}", flush=True)
     print(f"head: {args.head}", flush=True)
     if args.head == "temporal":
@@ -457,6 +464,7 @@ def main():
         head_type=args.head,
         adapter_dim=args.adapter_dim,
         adapter_layers=args.adapter_layers,
+        backbone_type=args.backbone,
     ).to(device)
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     frozen = sum(p.numel() for p in model.parameters() if not p.requires_grad)
@@ -514,8 +522,6 @@ def main():
             if hard_negatives is not None:
                 negative_targets = _move(batch[5], device)
                 negative_target_lengths = _move(batch[6], device)
-            waveforms = _move(waveforms, device)
-            sample_lengths = _move(sample_lengths, device)
             targets = _move(targets, device)
             target_lengths = _move(target_lengths, device)
             optimizer.zero_grad(set_to_none=True)

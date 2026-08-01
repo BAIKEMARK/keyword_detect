@@ -13,7 +13,8 @@ from ctc_text import build_vocabulary, checkpoint_units, warm_vocabulary
 from diagnose_registered_ctc import collect_features, make_loader
 from registered_reranker import FEATURES, decision_scores, fit_reranker, subset_auc
 from runtime import select_device
-from wavlm_ctc_model import FrozenWavLMCTC, checkpoint_head_config
+from wavlm_ctc_model import (FrozenWavLMCTC, checkpoint_backbone_type,
+                             checkpoint_head_config)
 from ctc_data import load_ctc_score_pairs
 
 
@@ -128,6 +129,7 @@ def main(argv=None):
     model_id = args.model_id or checkpoint["model_id"]
     model = FrozenWavLMCTC(
         len(vocabulary), model_id, checkpoint["dropout"],
+        backbone_type=checkpoint_backbone_type(checkpoint),
         **checkpoint_head_config(checkpoint),
     ).to(torch_device)
     model.load_head_state_dict(checkpoint["head"])
@@ -136,6 +138,7 @@ def main(argv=None):
     print(f"device: {torch_device}", flush=True)
     print(f"workers: {args.workers}", flush=True)
     print(f"model: {model_id} (frozen)", flush=True)
+    print(f"backbone: {model.backbone_type}", flush=True)
     print(f"head: {checkpoint_head_config(checkpoint)['head_type']}", flush=True)
     print(f"train pairs: {len(train_pairs)} / {len(all_train_pairs)}", flush=True)
     print(f"amp: {amp_enabled}", flush=True)

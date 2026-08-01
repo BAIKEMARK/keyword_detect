@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+from pathlib import Path
 from typing import Mapping, Sequence
 
 import torch
@@ -7,6 +9,66 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from wavlm_model import length_mask
+
+
+BACKBONE_TYPES = ("auto", "raw", "w2v-bert", "whisper", "parakeet")
+
+
+def _find_nemo_checkpoint(model_id: str) -> str | None:
+    path = Path(model_id)
+    if path.is_file() and path.suffix == ".nemo":
+        return str(path)
+    if path.is_dir():
+        checkpoints = sorted(path.rglob("*.nemo"))
+        if checkpoints:
+            return str(checkpoints[0])
+    return None
+
+
+def resolve_backbone_type(model_id: str, backbone_type: str = "auto") -> str:
+    if backbone_type not in BACKBONE_TYPES:
+        raise ValueError(f"unsupported backbone type: {backbone_type!r}")
+    if backbone_type != "auto":
+        return backbone_type
+    if _find_nemo_checkpoint(model_id) is not None:
+        return "parakeet"
+    try:
+        from transformers import AutoConfig
+
+        config = AutoConfig.from_pretrained(model_id)
+        model_type = str(getattr(config, "model_type", "")).lower()
+    except (ImportError, AttributeError, OSError, ValueError):
+        return "raw"
+    if model_type == "whisper":
+        return "whisper"
+    if model_type in {"wav2vec2-bert", "wav2vec2_bert"}:
+        return "w2v-bert"
+    return "raw"
+
+
+def checkpoint_backbone_type(checkpoint: Mapping) -> str:
+    config = checkpoint.get("training_config", {})
+    return config.get(
+        "backbone_type", checkpoint.get("backbone_type", "auto"))
+
+
+def _module_device(module: nn.Module) -> torch.device:
+    parameter = next(module.parameters(), None)
+    if parameter is None:
+        return torch.device("cpu")
+    return parameter.device
+
+
+def _scaled_lengths(lengths: torch.Tensor, source_width: int,
+                    target_width: int) -> torch.Tensor:
+    if source_width <= 0 or target_width <= 0:
+        raise ValueError("feature widths must be positive")
+    lengths = lengths.to(dtype=torch.long)
+    return torch.div(
+        lengths * target_width + source_width - 1,
+        source_width,
+        rounding_mode="floor",
+    ).clamp(min=1, max=target_width)
 
 
 class CharacterCTCHead(nn.Module):
@@ -111,38 +173,37 @@ class FrozenWavLMCTC(nn.Module):
     def __init__(self, vocab_size: int,
                  model_id: str = "microsoft/wavlm-base-plus",
                  dropout: float = 0.1, head_type: str = "linear",
-                 adapter_dim: int = 256, adapter_layers: int = 2):
+                 adapter_dim: int = 256, adapter_layers: int = 2,
+                 backbone_type: str = "auto"):
         super().__init__()
-        try:
-            from transformers import AutoModel
-        except ImportError as exc:
-            raise RuntimeError(
-                "transformers is required: pip install 'transformers>=4.40,<5'") \
-                from exc
-
         self.model_id = model_id
-        try:
-            self.backbone = AutoModel.from_pretrained(model_id)
-        except Exception as exc:
-            raise RuntimeError(
-                f"failed to load frozen WavLM backbone: {model_id}") from exc
+        self.backbone_type = resolve_backbone_type(model_id, backbone_type)
+        self.feature_extractor = None
+        self.preprocessor = None
+        self._parakeet_hidden_size = None
+        self._load_backbone(model_id)
         for parameter in self.backbone.parameters():
             parameter.requires_grad = False
+        if self.preprocessor is not None:
+            for parameter in self.preprocessor.parameters():
+                parameter.requires_grad = False
         self.backbone.eval()
+        if self.preprocessor is not None:
+            self.preprocessor.eval()
 
-        config = self.backbone.config
+        hidden_size, num_hidden_states = self._backbone_dimensions()
         self.head_type = head_type
         if head_type == "linear":
             self.head = CharacterCTCHead(
-                hidden_size=config.hidden_size,
-                num_hidden_states=config.num_hidden_layers + 1,
+                hidden_size=hidden_size,
+                num_hidden_states=num_hidden_states,
                 vocab_size=vocab_size,
                 dropout=dropout,
             )
         elif head_type == "temporal":
             self.head = TemporalCTCHead(
-                hidden_size=config.hidden_size,
-                num_hidden_states=config.num_hidden_layers + 1,
+                hidden_size=hidden_size,
+                num_hidden_states=num_hidden_states,
                 vocab_size=vocab_size,
                 adapter_dim=adapter_dim,
                 adapter_layers=adapter_layers,
@@ -151,13 +212,97 @@ class FrozenWavLMCTC(nn.Module):
         else:
             raise ValueError(f"unsupported CTC head type: {head_type!r}")
 
+    def _load_backbone(self, model_id: str):
+        if self.backbone_type == "parakeet":
+            self._load_parakeet(model_id)
+            return
+        try:
+            from transformers import AutoModel
+        except ImportError as exc:
+            raise RuntimeError(
+                "transformers is required: pip install 'transformers>=4.40,<5'") \
+                from exc
+        try:
+            if self.backbone_type == "whisper":
+                from transformers import AutoFeatureExtractor, WhisperModel
+
+                self.feature_extractor = AutoFeatureExtractor.from_pretrained(
+                    model_id)
+                whisper = WhisperModel.from_pretrained(model_id)
+                self.backbone = whisper.encoder
+                del whisper
+            else:
+                self.backbone = AutoModel.from_pretrained(model_id)
+                if self.backbone_type == "w2v-bert":
+                    from transformers import AutoFeatureExtractor
+
+                    self.feature_extractor = \
+                        AutoFeatureExtractor.from_pretrained(model_id)
+        except Exception as exc:
+            raise RuntimeError(
+                f"failed to load frozen {self.backbone_type} backbone: "
+                f"{model_id}") from exc
+
+    def _load_parakeet(self, model_id: str):
+        checkpoint = _find_nemo_checkpoint(model_id)
+        if checkpoint is None:
+            raise FileNotFoundError(
+                f"no .nemo checkpoint found under: {model_id}")
+        try:
+            from nemo.collections.asr.models import ASRModel
+        except ImportError as exc:
+            raise RuntimeError(
+                "Parakeet requires NeMo ASR; run: "
+                "bash scripts/install_parakeet_runtime.sh") from exc
+        try:
+            model = ASRModel.restore_from(
+                restore_path=checkpoint, map_location="cpu")
+        except Exception as exc:
+            raise RuntimeError(
+                f"failed to restore Parakeet checkpoint: {checkpoint}") from exc
+        self.preprocessor = model.preprocessor
+        self.backbone = model.encoder
+        encoder_config = getattr(getattr(model, "cfg", None), "encoder", None)
+        candidates = (
+            getattr(encoder_config, "d_model", None),
+            getattr(self.backbone, "d_model", None),
+            getattr(self.backbone, "_feat_out", None),
+            getattr(self.backbone, "feat_out", None),
+        )
+        self._parakeet_hidden_size = next(
+            (int(value) for value in candidates if value is not None), None)
+        if self._parakeet_hidden_size is None:
+            raise RuntimeError("cannot determine Parakeet encoder hidden size")
+        del model
+
+    def _backbone_dimensions(self):
+        if self.backbone_type == "parakeet":
+            return self._parakeet_hidden_size, 1
+        config = self.backbone.config
+        if self.backbone_type == "whisper":
+            hidden_size = int(config.d_model)
+            layers = int(getattr(
+                config, "encoder_layers",
+                getattr(config, "num_hidden_layers", 0)))
+        else:
+            hidden_size = int(config.hidden_size)
+            layers = int(config.num_hidden_layers)
+        if layers <= 0:
+            raise RuntimeError("cannot determine backbone layer count")
+        return hidden_size, layers + 1
+
     def train(self, mode: bool = True):
         super().train(mode)
         self.backbone.eval()
+        if self.preprocessor is not None:
+            self.preprocessor.eval()
         return self
 
-    def forward(self, waveforms: torch.Tensor,
-                sample_lengths: torch.Tensor):
+    def _forward_raw(self, waveforms: torch.Tensor,
+                     sample_lengths: torch.Tensor):
+        device = _module_device(self.backbone)
+        waveforms = waveforms.to(device, non_blocking=True)
+        sample_lengths = sample_lengths.to(device, non_blocking=True)
         attention_mask = length_mask(
             sample_lengths, waveforms.shape[1]).long()
         with torch.no_grad():
@@ -168,10 +313,152 @@ class FrozenWavLMCTC(nn.Module):
                 return_dict=True,
             )
         if output.hidden_states is None:
-            raise RuntimeError("WavLM did not return hidden states")
+            raise RuntimeError("raw speech backbone did not return hidden states")
         output_lengths = self.backbone._get_feat_extract_output_lengths(
             sample_lengths).long().clamp(max=output.hidden_states[0].shape[1])
-        logits = self.head(output.hidden_states, output_lengths)
+        return output.hidden_states, output_lengths
+
+    def _extract_transformer_features(self, waveforms, sample_lengths):
+        lengths = [int(length) for length in sample_lengths.detach().cpu()]
+        cpu_waveforms = waveforms.detach().float().cpu()
+        audio = [
+            cpu_waveforms[index, :length].numpy()
+            for index, length in enumerate(lengths)
+        ]
+        kwargs = {
+            "sampling_rate": 16000,
+            "return_attention_mask": True,
+            "return_tensors": "pt",
+        }
+        if self.backbone_type == "whisper":
+            kwargs.update({
+                "padding": "max_length",
+                "max_length": max(lengths),
+                "truncation": True,
+            })
+        else:
+            kwargs.update({"padding": True, "truncation": False})
+        features = self.feature_extractor(audio, **kwargs)
+        input_features = features["input_features"]
+        attention_mask = features.get("attention_mask")
+        feature_width = (
+            input_features.shape[-1]
+            if self.backbone_type == "whisper"
+            else input_features.shape[1]
+        )
+        if attention_mask is None:
+            feature_lengths = _scaled_lengths(
+                torch.tensor(lengths), max(lengths), feature_width)
+        else:
+            mask_lengths = attention_mask.long().sum(dim=-1)
+            feature_lengths = _scaled_lengths(
+                mask_lengths, attention_mask.shape[-1], feature_width)
+        device = _module_device(self.backbone)
+        return (
+            input_features.to(device, non_blocking=True),
+            feature_lengths.to(device, non_blocking=True),
+        )
+
+    def _forward_w2v_bert(self, waveforms, sample_lengths):
+        input_features, feature_lengths = self._extract_transformer_features(
+            waveforms, sample_lengths)
+        attention_mask = length_mask(
+            feature_lengths, input_features.shape[1]).long()
+        with torch.no_grad():
+            output = self.backbone(
+                input_features,
+                attention_mask=attention_mask,
+                output_hidden_states=True,
+                return_dict=True,
+            )
+        if output.hidden_states is None:
+            raise RuntimeError("W2V-BERT did not return hidden states")
+        hidden_width = output.hidden_states[0].shape[1]
+        output_lengths = _scaled_lengths(
+            feature_lengths, input_features.shape[1], hidden_width)
+        return output.hidden_states, output_lengths
+
+    @staticmethod
+    def _call_whisper_layer(layer, hidden_states, attention_mask):
+        parameters = inspect.signature(layer.forward).parameters
+        kwargs = {}
+        if "attention_mask" in parameters:
+            kwargs["attention_mask"] = attention_mask
+        if "layer_head_mask" in parameters:
+            kwargs["layer_head_mask"] = None
+        if "output_attentions" in parameters:
+            kwargs["output_attentions"] = False
+        output = layer(hidden_states, **kwargs)
+        return output[0] if isinstance(output, (tuple, list)) else output
+
+    def _forward_whisper(self, waveforms, sample_lengths):
+        input_features, feature_lengths = self._extract_transformer_features(
+            waveforms, sample_lengths)
+        with torch.no_grad():
+            hidden = F.gelu(self.backbone.conv1(input_features))
+            hidden = F.gelu(self.backbone.conv2(hidden)).permute(0, 2, 1)
+            output_lengths = torch.div(
+                feature_lengths + 1, 2, rounding_mode="floor").clamp(
+                    max=hidden.shape[1])
+            if hidden.shape[1] > self.backbone.embed_positions.weight.shape[0]:
+                raise ValueError("Whisper input exceeds positional embedding size")
+            positions = self.backbone.embed_positions.weight[
+                :hidden.shape[1]].to(dtype=hidden.dtype)
+            hidden = hidden + positions
+            hidden = F.dropout(
+                hidden, p=float(getattr(self.backbone.config, "dropout", 0.0)),
+                training=False)
+            valid = length_mask(output_lengths, hidden.shape[1])
+            attention_mask = hidden.new_zeros(
+                (hidden.shape[0], 1, hidden.shape[1], hidden.shape[1]))
+            attention_mask.masked_fill_(
+                ~valid[:, None, None, :], torch.finfo(hidden.dtype).min)
+            hidden_states = [hidden]
+            for layer in self.backbone.layers:
+                hidden = self._call_whisper_layer(
+                    layer, hidden, attention_mask)
+                hidden_states.append(hidden)
+            hidden = self.backbone.layer_norm(hidden)
+            hidden_states[-1] = hidden
+        return tuple(hidden_states), output_lengths
+
+    def _forward_parakeet(self, waveforms, sample_lengths):
+        device = _module_device(self.backbone)
+        waveforms = waveforms.to(device, non_blocking=True)
+        sample_lengths = sample_lengths.to(device, non_blocking=True)
+        with torch.no_grad():
+            processed, processed_lengths = self.preprocessor(
+                input_signal=waveforms, length=sample_lengths)
+            output = self.backbone(
+                audio_signal=processed, length=processed_lengths)
+        if not isinstance(output, (tuple, list)) or len(output) < 2:
+            raise RuntimeError("Parakeet encoder returned an unexpected output")
+        hidden, output_lengths = output[:2]
+        if hidden.ndim != 3:
+            raise RuntimeError("Parakeet encoder output must be three-dimensional")
+        if hidden.shape[1] == self._parakeet_hidden_size:
+            hidden = hidden.transpose(1, 2)
+        elif hidden.shape[2] != self._parakeet_hidden_size:
+            raise RuntimeError("Parakeet encoder hidden dimension is unexpected")
+        return (hidden,), output_lengths.long()
+
+    def forward(self, waveforms: torch.Tensor,
+                sample_lengths: torch.Tensor):
+        if self.backbone_type == "raw":
+            hidden_states, output_lengths = self._forward_raw(
+                waveforms, sample_lengths)
+        elif self.backbone_type == "w2v-bert":
+            hidden_states, output_lengths = self._forward_w2v_bert(
+                waveforms, sample_lengths)
+        elif self.backbone_type == "whisper":
+            hidden_states, output_lengths = self._forward_whisper(
+                waveforms, sample_lengths)
+        elif self.backbone_type == "parakeet":
+            hidden_states, output_lengths = self._forward_parakeet(
+                waveforms, sample_lengths)
+        else:  # pragma: no cover - guarded by resolve_backbone_type
+            raise RuntimeError(f"unsupported backbone: {self.backbone_type}")
+        logits = self.head(hidden_states, output_lengths)
         output_lengths = output_lengths.clamp(max=logits.shape[1])
         return logits, output_lengths
 

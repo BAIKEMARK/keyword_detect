@@ -17,7 +17,8 @@ from ctc_text import build_vocabulary, checkpoint_units, warm_vocabulary
 from data import normalize_waveform, read_wav, truncate_waveform
 from runtime import select_device, should_pin_memory
 from train_wavlm_ctc import ctc_valid_mask
-from wavlm_ctc_model import FrozenWavLMCTC, checkpoint_head_config
+from wavlm_ctc_model import (FrozenWavLMCTC, checkpoint_backbone_type,
+                             checkpoint_head_config)
 
 
 FEATURES = (
@@ -128,11 +129,10 @@ def collect_features(model, loader, device, amp_enabled, vocabulary):
         (enroll, query, enroll_sample_lengths, query_sample_lengths,
          targets, target_lengths, labels, pair_ids) = batch
         batch_size = len(pair_ids)
-        waveforms = torch.cat([enroll, query], dim=0).to(
-            device, non_blocking=True)
+        waveforms = torch.cat([enroll, query], dim=0)
         sample_lengths = torch.cat([
             enroll_sample_lengths, query_sample_lengths,
-        ]).to(device, non_blocking=True)
+        ])
         targets = targets.to(device, non_blocking=True)
         target_lengths = target_lengths.to(device, non_blocking=True)
         with torch.autocast(
@@ -210,6 +210,7 @@ def main(argv=None):
     model_id = args.model_id or checkpoint["model_id"]
     model = FrozenWavLMCTC(
         len(vocabulary), model_id, checkpoint["dropout"],
+        backbone_type=checkpoint_backbone_type(checkpoint),
         **checkpoint_head_config(checkpoint),
     ).to(device)
     model.load_head_state_dict(checkpoint["head"])

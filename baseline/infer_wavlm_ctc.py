@@ -12,7 +12,8 @@ from ctc_score import normalized_ctc_score
 from ctc_text import build_vocabulary, checkpoint_units, warm_vocabulary
 from runtime import select_device
 from train_wavlm_ctc import ctc_valid_mask, make_score_loader
-from wavlm_ctc_model import FrozenWavLMCTC, checkpoint_head_config
+from wavlm_ctc_model import (FrozenWavLMCTC, checkpoint_backbone_type,
+                             checkpoint_head_config)
 
 
 def parse_args():
@@ -38,8 +39,6 @@ def collect_scores(model, loader, device, amp_enabled, blank_id):
     for batch in loader:
         (waveforms, sample_lengths, targets, target_lengths,
          labels, pair_ids) = batch
-        waveforms = waveforms.to(device, non_blocking=True)
-        sample_lengths = sample_lengths.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
         target_lengths = target_lengths.to(device, non_blocking=True)
         with torch.autocast(
@@ -99,11 +98,13 @@ def main():
     head_config = checkpoint_head_config(checkpoint)
     model = FrozenWavLMCTC(
         len(vocabulary), model_id, checkpoint["dropout"],
+        backbone_type=checkpoint_backbone_type(checkpoint),
         **head_config).to(device)
     model.load_head_state_dict(checkpoint["head"])
     print(f"device: {device}")
     print(f"workers: {args.workers}")
     print(f"model: {model_id} (frozen)")
+    print(f"backbone: {model.backbone_type}")
     print(f"units: {units}")
     print(f"head: {head_config['head_type']}")
     print(f"loaded {args.ckpt} (dev mean AUC={checkpoint.get('auc')})")

@@ -31,6 +31,7 @@ from train_wavlm_ctc import (ctc_training_objective,  # noqa: E402
                              training_config,
                              validate_resume_checkpoint)
 from wavlm_ctc_model import (FrozenWavLMCTC, TemporalCTCHead,  # noqa: E402
+                             checkpoint_backbone_type,
                              checkpoint_head_config)
 
 
@@ -219,6 +220,7 @@ class CTCDataTest(unittest.TestCase):
         args = parse_args([
             "--train-zip", "train/wav.zip",
             "--train-csv", "train/train_label.csv",
+            "--backbone", "whisper",
             "--head", "temporal",
             "--adapter-dim", "192",
             "--adapter-layers", "3",
@@ -230,6 +232,7 @@ class CTCDataTest(unittest.TestCase):
         ])
         self.assertEqual(args.train_zip, "train/wav.zip")
         self.assertEqual(args.train_csv, "train/train_label.csv")
+        self.assertEqual(args.backbone, "whisper")
         self.assertIsNone(args.subset)
         self.assertEqual(args.head, "temporal")
         self.assertEqual(args.adapter_dim, 192)
@@ -282,6 +285,10 @@ class CTCDataTest(unittest.TestCase):
                 new_checkpoint, config, vocabulary)
 
     def test_old_checkpoint_defaults_to_linear_head(self):
+        self.assertEqual(checkpoint_backbone_type({}), "auto")
+        self.assertEqual(checkpoint_backbone_type({
+            "backbone_type": "w2v-bert",
+        }), "w2v-bert")
         self.assertEqual(checkpoint_head_config({}), {
             "head_type": "linear",
             "adapter_dim": 256,
