@@ -371,11 +371,14 @@ def main():
     train_examples = [examples[index] for index in indices]
     hard_negatives = None
     if args.hard_negative_weight > 0:
+        print("hard-negative mining: building phoneme neighbors...", flush=True)
         hard_negatives = build_phoneme_hard_negatives(
             vocabulary,
             [example["text"] for example in train_examples],
             [example["text"] for example in examples],
         )
+        print(f"hard-negative mining: ready ({len(hard_negatives)} anchors)",
+              flush=True)
 
     print(f"device: {device}", flush=True)
     print(f"workers: {args.workers}", flush=True)

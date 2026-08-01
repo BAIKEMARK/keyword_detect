@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import Iterable, Mapping, Sequence
 
 from ctc_diagnostics import sequence_edit_distance
@@ -19,8 +19,11 @@ def _phone_ngrams(sequence: Sequence[int]) -> set[tuple[int, ...]]:
 def build_phoneme_hard_negatives(
         vocabulary: CTCVocabulary,
         anchor_texts: Iterable[str],
-        candidate_texts: Iterable[str]) -> Mapping[str, str]:
+        candidate_texts: Iterable[str],
+        max_candidates: int = 128) -> Mapping[str, str]:
     """Return the nearest distinct training word for each anchor word."""
+    if max_candidates <= 0:
+        raise ValueError("max_candidates must be positive")
     candidates = sorted({vocabulary.normalize(text) for text in candidate_texts})
     if len(candidates) < 2:
         raise ValueError("hard-negative mining requires at least two words")
@@ -39,9 +42,10 @@ def build_phoneme_hard_negatives(
     neighbors = {}
     for anchor in sorted({vocabulary.normalize(text) for text in anchor_texts}):
         pronunciation = tuple(vocabulary.encode(anchor).tolist())
-        pool = set()
+        overlap = Counter()
         for ngram in _phone_ngrams(pronunciation):
-            pool.update(ngram_index[ngram])
+            overlap.update(ngram_index[ngram])
+        pool = set(overlap)
         pool.discard(anchor)
         pool = {
             candidate for candidate in pool
@@ -69,6 +73,17 @@ def build_phoneme_hard_negatives(
         if not pool:
             raise ValueError(
                 f"no distinguishable phoneme hard negative for {anchor!r}")
+
+        # Keep exact edit distance bounded; n-gram overlap and length are
+        # cheap filters that preserve the confusing candidates we need.
+        pool = sorted(
+            pool,
+            key=lambda candidate: (
+                abs(len(pronunciation) - len(pronunciations[candidate])),
+                -overlap.get(candidate, 0),
+                candidate,
+            ),
+        )[:max_candidates]
 
         def rank(candidate: str):
             candidate_pronunciation = pronunciations[candidate]
