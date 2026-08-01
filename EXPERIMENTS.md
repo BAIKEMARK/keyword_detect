@@ -1,6 +1,6 @@
 # 实验记录
 
-最近更新：2026-07-30
+最近更新：2026-08-01
 
 ## 记录约定
 
@@ -35,6 +35,7 @@
 | E017 | 当前线上最佳 | WavLM Large + HuBERT Large CTC 秩融合 | 100,000 utterance 两分支 | - | - | - | **0.90123** | - | E015 + E016 | `c3f1b5c` |
 | E018 | 诊断完成，淘汰替代打分 | Large CTC greedy、似然差和编辑相似度零重训诊断 | E015 + E016 | 0.8930 / 0.8900 | 0.8803 / 0.8860 | 0.8866 / 0.8880 | - | - | E015 + E016 | `7c1fe7b` |
 | E019 | 已完成，停止路线 | 冻结 HuBERT Large 注册音频 soft alignment matcher | 50,000 pair | 0.5182 | 0.4985 | 0.5083 | - | 1 | `baseline/checkpoints/hubert_large_align_50k_e3.pt` | `7c1fe7b` |
+| E020 | 已完成，待融合 | HuBERT Large 音素 CTC + Temporal Adapter + hard-negative margin，batch size 128，10 epoch | 100,000 utterance | 0.8960 | 0.8824 | **0.8892** | - | 8 | `baseline/checkpoints/hubert_large_phoneme_temporal_hardneg_100k_e10.pt` | `9f24b06` |
 
 ## 线上提交记录
 
@@ -446,6 +447,31 @@ batch size 32，dev batch size 8，3 epoch，DEMAND 加噪概率 0.5。可训练
 常数预测。实现测试已覆盖参数梯度、padding mask 和 enroll/query 对称性，因此当前
 结论是无条件音频相似度特征缺乏判别信息。停止扩大数据和增加 epoch；只有在加入
 音素条件或 hard negative 后才重新考虑注册音频分支。
+
+## E020：HuBERT Large 音素 CTC + hard-negative margin
+
+在 E015 的 HuBERT Large Temporal CTC 上加入音素近邻负词和
+`softplus(margin + negative_score - true_score)`，配置为 hard-negative weight
+`0.25`、margin `0.5`、100,000 utterance、batch size 128、10 epoch。训练前为
+8,335 个训练词建立了可区分音素近邻，峰值显存 `6.83GB`。
+
+| Epoch | Seen | Unseen | Mean |
+|---:|---:|---:|---:|
+| 1 | 0.8651 | 0.8493 | 0.8572 |
+| 2 | 0.8829 | 0.8646 | 0.8738 |
+| 3 | 0.8856 | 0.8748 | 0.8802 |
+| 4 | 0.8905 | 0.8723 | 0.8814 |
+| 5 | 0.8922 | 0.8766 | 0.8844 |
+| 6 | 0.8904 | 0.8748 | 0.8826 |
+| 7 | 0.8932 | 0.8791 | 0.8862 |
+| 8 | 0.8960 | 0.8824 | **0.8892** |
+| 9 | 0.8941 | 0.8801 | 0.8871 |
+| 10 | 0.8958 | 0.8814 | 0.8886 |
+
+相对原 HuBERT Large E015，Dev Mean 提升 `0.0026`；相对 WavLM Large E016，
+提升 `0.0012`。hard-negative margin loss 从约 `0.96` 下降到 `0.43`，说明训练
+确实在压低近音目标分数。下一步先测试它替换原 HuBERT 分支后的 WavLM/HuBERT 秩融合，
+暂不提交单模型结果。
 
 ## 线上收益拆解
 
