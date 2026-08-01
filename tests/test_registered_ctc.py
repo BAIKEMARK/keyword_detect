@@ -22,7 +22,7 @@ class RegisteredCTCTest(unittest.TestCase):
             log_probs, left_lengths, right_lengths)
         changed = log_probs.clone()
         changed[0, 4:] = -100.0
-        changed[1, 3:] = -100.0
+        changed[1, 6:] = -100.0
         changed[2, 5:] = -100.0
         changed[3, 3:] = -100.0
         actual = posterior_alignment(

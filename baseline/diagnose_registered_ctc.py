@@ -45,7 +45,7 @@ class RegisteredCTCDataset(Dataset):
         enroll = self._waveform(f"wav/{pair_id}_enroll.wav")
         query = self._waveform(f"wav/{pair_id}_query.wav")
         return (
-            enroll, query, pair["enroll_text"], pair["label"], pair_id,
+            enroll, query, pair["enroll_text"], pair.get("label", -1), pair_id,
             len(enroll), len(query),
         )
 
