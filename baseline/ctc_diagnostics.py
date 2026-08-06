@@ -9,6 +9,7 @@ from ctc_text import required_ctc_frames
 
 
 FORCED_ALIGNMENT_FEATURES = (
+    "alignment_valid",
     "viterbi_score",
     "path_mass_margin",
     "aligned_token_logprob",
@@ -181,8 +182,25 @@ def forced_alignment_features(
             target_lengths > targets.shape[1]):
         raise ValueError("target lengths are invalid")
     required = required_ctc_frames(targets, target_lengths)
-    if torch.any(input_lengths < required):
-        raise ValueError("forced alignment requires CTC-valid targets")
+    valid = input_lengths >= required
+    if not valid.all():
+        defaults = {
+            name: log_probs.new_zeros(batch_size)
+            for name in FORCED_ALIGNMENT_FEATURES
+        }
+        defaults["frames_per_token"] = (
+            input_lengths.to(log_probs.dtype) / target_lengths)
+        if valid.any():
+            valid_features = forced_alignment_features(
+                log_probs[valid], input_lengths[valid], targets[valid],
+                target_lengths[valid], blank_id,
+                target_scores=(
+                    target_scores[valid] if target_scores is not None else None
+                ),
+            )
+            for name, values in valid_features.items():
+                defaults[name][valid] = values
+        return defaults
 
     max_target_length = targets.shape[1]
     max_states = 2 * max_target_length + 1
@@ -302,6 +320,7 @@ def forced_alignment_features(
             log_probs, input_lengths, targets, target_lengths, blank_id)
 
     return {
+        "alignment_valid": log_probs.new_ones(batch_size),
         "viterbi_score": normalized_viterbi,
         "path_mass_margin": target_scores - normalized_viterbi,
         "aligned_token_logprob": aligned_token_sum / aligned_token_count,

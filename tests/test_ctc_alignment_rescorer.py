@@ -73,15 +73,34 @@ class ForcedAlignmentTest(unittest.TestCase):
         self.assertAlmostEqual(
             features["viterbi_blank_ratio"].item(), 1 / 3, places=5)
 
-    def test_rejects_ctc_invalid_alignment(self):
-        with self.assertRaises(ValueError):
-            forced_alignment_features(
-                _log_probs([1, 1], classes=2),
-                torch.tensor([2]),
-                torch.tensor([[1, 1]]),
-                torch.tensor([2]),
-                blank_id=0,
-            )
+    def test_marks_ctc_invalid_alignment_without_dropping_the_row(self):
+        features = forced_alignment_features(
+            _log_probs([1, 1], classes=2),
+            torch.tensor([2]),
+            torch.tensor([[1, 1]]),
+            torch.tensor([2]),
+            blank_id=0,
+        )
+        self.assertEqual(features["alignment_valid"].item(), 0.0)
+        self.assertEqual(features["viterbi_score"].item(), 0.0)
+        self.assertEqual(features["frames_per_token"].item(), 1.0)
+
+    def test_mixed_batch_aligns_only_valid_rows(self):
+        log_probs = torch.cat([
+            _log_probs([0, 1, 0]),
+            _log_probs([1, 1, 0]),
+        ])
+        features = forced_alignment_features(
+            log_probs,
+            torch.tensor([3, 2]),
+            torch.tensor([[1, 0], [1, 1]]),
+            torch.tensor([1, 2]),
+            blank_id=0,
+        )
+        torch.testing.assert_close(
+            features["alignment_valid"], torch.tensor([1.0, 0.0]))
+        self.assertGreater(features["viterbi_score"][0].item(), -0.01)
+        self.assertEqual(features["viterbi_score"][1].item(), 0.0)
 
 
 class AlignmentRescorerTest(unittest.TestCase):

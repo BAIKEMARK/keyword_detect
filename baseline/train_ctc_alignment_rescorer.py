@@ -127,6 +127,11 @@ def main(argv=None):
             row["subset"] = subset
         rows.extend(subset_rows)
 
+    alignment_valid = sum(
+        int(row["alignment_valid"] > 0.5) for row in rows)
+    print(
+        f"forced alignment: valid={alignment_valid} "
+        f"invalid={len(rows) - alignment_valid}", flush=True)
     target_scores = np.asarray(
         [row["target_score"] for row in rows], dtype=np.float64)
     _report("target CTC", rows, target_scores)
