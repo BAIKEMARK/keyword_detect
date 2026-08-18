@@ -32,7 +32,8 @@ from train_wavlm_ctc import (ctc_training_objective,  # noqa: E402
                              validate_resume_checkpoint)
 from wavlm_ctc_model import (FrozenWavLMCTC, TemporalCTCHead,  # noqa: E402
                              checkpoint_backbone_type,
-                             checkpoint_head_config)
+                             checkpoint_head_config,
+                             checkpoint_model_config)
 
 
 class CharacterVocabularyTest(unittest.TestCase):
@@ -224,6 +225,8 @@ class CTCDataTest(unittest.TestCase):
             "--head", "temporal",
             "--adapter-dim", "192",
             "--adapter-layers", "3",
+            "--unfreeze-layers", "2",
+            "--backbone-lr", "0.00001",
             "--hard-negative-weight", "0.25",
             "--hard-negative-margin", "0.75",
             "--seed", "123",
@@ -237,6 +240,8 @@ class CTCDataTest(unittest.TestCase):
         self.assertEqual(args.head, "temporal")
         self.assertEqual(args.adapter_dim, 192)
         self.assertEqual(args.adapter_layers, 3)
+        self.assertEqual(args.unfreeze_layers, 2)
+        self.assertEqual(args.backbone_lr, 1e-5)
         self.assertEqual(args.hard_negative_weight, 0.25)
         self.assertEqual(args.hard_negative_margin, 0.75)
         self.assertEqual(args.seed, 123)
@@ -299,6 +304,10 @@ class CTCDataTest(unittest.TestCase):
             "adapter_dim": 128,
             "adapter_layers": 1,
         })["head_type"], "temporal")
+        self.assertEqual(checkpoint_model_config({})["unfreeze_layers"], 0)
+        self.assertEqual(checkpoint_model_config({
+            "training_config": {"unfreeze_layers": 3},
+        })["unfreeze_layers"], 3)
 
 
 class CTCScoreTest(unittest.TestCase):

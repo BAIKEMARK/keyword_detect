@@ -14,7 +14,8 @@ from diagnose_registered_ctc import collect_features, make_loader
 from registered_reranker import FEATURES, decision_scores, fit_reranker, subset_auc
 from runtime import select_device
 from wavlm_ctc_model import (FrozenWavLMCTC, checkpoint_backbone_type,
-                             checkpoint_head_config)
+                             checkpoint_head_config, checkpoint_model_config,
+                             load_ctc_checkpoint_state)
 from ctc_data import load_ctc_score_pairs
 
 
@@ -130,9 +131,9 @@ def main(argv=None):
     model = FrozenWavLMCTC(
         len(vocabulary), model_id, checkpoint["dropout"],
         backbone_type=checkpoint_backbone_type(checkpoint),
-        **checkpoint_head_config(checkpoint),
+        **checkpoint_model_config(checkpoint),
     ).to(torch_device)
-    model.load_head_state_dict(checkpoint["head"])
+    load_ctc_checkpoint_state(model, checkpoint)
     model.eval()
 
     print(f"device: {torch_device}", flush=True)
@@ -170,7 +171,10 @@ def main(argv=None):
         dev_rows.extend(rows)
 
     dev_scores = decision_scores(dev_rows, reranker)
-    _print_auc("dev reranker", dev_rows, dev_scores)
+    _print_auc(
+        "dev reranker", dev_rows, dev_scores,
+        subsets=("all", "seen", "unseen"),
+    )
     _write_dev_scores(args.out_dev, dev_rows, dev_scores)
     _write_model(
         args.out_model,

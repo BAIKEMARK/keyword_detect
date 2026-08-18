@@ -169,15 +169,40 @@ def checkpoint_head_config(checkpoint: Mapping):
     }
 
 
+def checkpoint_backbone_tune_config(checkpoint: Mapping):
+    config = checkpoint.get("training_config", {})
+    return {
+        "unfreeze_layers": int(config.get(
+            "unfreeze_layers", checkpoint.get("unfreeze_layers", 0))),
+    }
+
+
+def checkpoint_model_config(checkpoint: Mapping):
+    return {
+        **checkpoint_head_config(checkpoint),
+        **checkpoint_backbone_tune_config(checkpoint),
+    }
+
+
+def load_ctc_checkpoint_state(model, checkpoint: Mapping):
+    model.load_head_state_dict(checkpoint["head"])
+    model.load_trainable_backbone_state_dict(
+        checkpoint.get("backbone_trainable"))
+
+
 class FrozenWavLMCTC(nn.Module):
     def __init__(self, vocab_size: int,
                  model_id: str = "microsoft/wavlm-base-plus",
                  dropout: float = 0.1, head_type: str = "linear",
                  adapter_dim: int = 256, adapter_layers: int = 2,
-                 backbone_type: str = "auto"):
+                 backbone_type: str = "auto", unfreeze_layers: int = 0):
         super().__init__()
+        if unfreeze_layers < 0:
+            raise ValueError("unfreeze_layers must be non-negative")
         self.model_id = model_id
         self.backbone_type = resolve_backbone_type(model_id, backbone_type)
+        self.unfreeze_layers = int(unfreeze_layers)
+        self._unfrozen_backbone_modules = []
         self.feature_extractor = None
         self.preprocessor = None
         self._parakeet_hidden_size = None
@@ -190,6 +215,17 @@ class FrozenWavLMCTC(nn.Module):
         self.backbone.eval()
         if self.preprocessor is not None:
             self.preprocessor.eval()
+        if self.unfreeze_layers:
+            layers = self._backbone_layers()
+            if self.unfreeze_layers > len(layers):
+                raise ValueError(
+                    f"unfreeze_layers={self.unfreeze_layers} exceeds "
+                    f"backbone layers={len(layers)}")
+            self._unfrozen_backbone_modules = list(
+                layers[-self.unfreeze_layers:])
+            for layer in self._unfrozen_backbone_modules:
+                for parameter in layer.parameters():
+                    parameter.requires_grad = True
 
         hidden_size, num_hidden_states = self._backbone_dimensions()
         self.head_type = head_type
@@ -243,6 +279,66 @@ class FrozenWavLMCTC(nn.Module):
                 f"failed to load frozen {self.backbone_type} backbone: "
                 f"{model_id}") from exc
 
+    def _backbone_layers(self):
+        candidates = (
+            ("encoder", "layers"),
+            ("encoder", "layer"),
+            ("layers",),
+            ("transformer", "layers"),
+            ("conformer", "layers"),
+        )
+        for path in candidates:
+            module = self.backbone
+            for name in path:
+                module = getattr(module, name, None)
+                if module is None:
+                    break
+            if module is not None and isinstance(
+                    module, (nn.ModuleList, list, tuple)):
+                return module
+        raise RuntimeError(
+            f"cannot locate transformer layers for {self.backbone_type} "
+            "backbone; use unfreeze_layers=0")
+
+    def trainable_backbone_state_dict(self):
+        return {
+            key: value.detach().cpu().clone()
+            for key, value in self.backbone.named_parameters()
+            if value.requires_grad
+        }
+
+    def load_trainable_backbone_state_dict(self, state_dict):
+        expected = {
+            key for key, value in self.backbone.named_parameters()
+            if value.requires_grad
+        }
+        if not expected:
+            if state_dict:
+                raise ValueError(
+                    "checkpoint contains trainable backbone parameters but "
+                    "current model has no unfrozen layers")
+            return
+        if state_dict is None:
+            raise ValueError(
+                "checkpoint is missing trainable backbone parameters")
+        actual = set(state_dict)
+        if actual != expected:
+            raise ValueError(
+                "trainable backbone checkpoint parameters do not match "
+                f"current model (missing={sorted(expected - actual)[:3]}, "
+                f"unexpected={sorted(actual - expected)[:3]})")
+        parameters = dict(self.backbone.named_parameters())
+        with torch.no_grad():
+            for key in expected:
+                parameters[key].copy_(state_dict[key].to(
+                    device=parameters[key].device,
+                    dtype=parameters[key].dtype))
+
+    def _backbone_context(self):
+        if self.training and self.unfreeze_layers:
+            return torch.enable_grad()
+        return torch.no_grad()
+
     def _load_parakeet(self, model_id: str):
         checkpoint = _find_nemo_checkpoint(model_id)
         if checkpoint is None:
@@ -294,6 +390,8 @@ class FrozenWavLMCTC(nn.Module):
     def train(self, mode: bool = True):
         super().train(mode)
         self.backbone.eval()
+        for layer in self._unfrozen_backbone_modules:
+            layer.train(mode)
         if self.preprocessor is not None:
             self.preprocessor.eval()
         return self
@@ -305,7 +403,7 @@ class FrozenWavLMCTC(nn.Module):
         sample_lengths = sample_lengths.to(device, non_blocking=True)
         attention_mask = length_mask(
             sample_lengths, waveforms.shape[1]).long()
-        with torch.no_grad():
+        with self._backbone_context():
             output = self.backbone(
                 waveforms,
                 attention_mask=attention_mask,
@@ -364,7 +462,7 @@ class FrozenWavLMCTC(nn.Module):
             waveforms, sample_lengths)
         attention_mask = length_mask(
             feature_lengths, input_features.shape[1]).long()
-        with torch.no_grad():
+        with self._backbone_context():
             output = self.backbone(
                 input_features,
                 attention_mask=attention_mask,
@@ -394,7 +492,7 @@ class FrozenWavLMCTC(nn.Module):
     def _forward_whisper(self, waveforms, sample_lengths):
         input_features, feature_lengths = self._extract_transformer_features(
             waveforms, sample_lengths)
-        with torch.no_grad():
+        with self._backbone_context():
             hidden = F.gelu(self.backbone.conv1(input_features))
             hidden = F.gelu(self.backbone.conv2(hidden)).permute(0, 2, 1)
             output_lengths = torch.div(
@@ -426,7 +524,7 @@ class FrozenWavLMCTC(nn.Module):
         device = _module_device(self.backbone)
         waveforms = waveforms.to(device, non_blocking=True)
         sample_lengths = sample_lengths.to(device, non_blocking=True)
-        with torch.no_grad():
+        with self._backbone_context():
             processed, processed_lengths = self.preprocessor(
                 input_signal=waveforms, length=sample_lengths)
             output = self.backbone(

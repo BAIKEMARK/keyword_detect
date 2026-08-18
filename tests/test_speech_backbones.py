@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "baseline"))
 
 from wavlm_ctc_model import (FrozenWavLMCTC, checkpoint_backbone_type,
+                             load_ctc_checkpoint_state,
                              resolve_backbone_type)  # noqa: E402
 
 
@@ -75,6 +76,82 @@ class SpeechBackboneTest(unittest.TestCase):
         self.assertEqual(model.backbone_type, "w2v-bert")
         self.assertEqual(log_probs.shape, (2, 6, 5))
         torch.testing.assert_close(lengths, torch.tensor([6, 4]))
+
+    def test_only_last_backbone_layer_is_trainable_and_checkpointed(self):
+        class ScaleLayer(torch.nn.Module):
+            def __init__(self, value):
+                super().__init__()
+                self.scale = torch.nn.Parameter(torch.tensor(value))
+
+            def forward(self, hidden):
+                return hidden * self.scale
+
+        class Encoder(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.layers = torch.nn.ModuleList([
+                    ScaleLayer(1.1), ScaleLayer(1.2),
+                ])
+
+        class Backbone(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.encoder = Encoder()
+                self.config = types.SimpleNamespace(
+                    hidden_size=4, num_hidden_layers=2)
+
+            def forward(self, waveforms, attention_mask,
+                        output_hidden_states, return_dict):
+                hidden = waveforms[:, ::2].unsqueeze(-1).repeat(1, 1, 4)
+                hidden_states = [hidden]
+                for layer in self.encoder.layers:
+                    hidden = layer(hidden)
+                    hidden_states.append(hidden)
+                return types.SimpleNamespace(
+                    hidden_states=tuple(hidden_states))
+
+            def _get_feat_extract_output_lengths(self, lengths):
+                return torch.div(lengths + 1, 2, rounding_mode="floor")
+
+        transformers = types.ModuleType("transformers")
+        transformers.AutoModel = types.SimpleNamespace(
+            from_pretrained=lambda model_id: Backbone())
+        with mock.patch.dict(sys.modules, {"transformers": transformers}):
+            model = FrozenWavLMCTC(
+                5, "fake/raw", dropout=0.0, backbone_type="raw",
+                unfreeze_layers=1)
+
+        first, last = model.backbone.encoder.layers
+        self.assertFalse(first.scale.requires_grad)
+        self.assertTrue(last.scale.requires_grad)
+        model.train()
+        self.assertFalse(model.backbone.training)
+        self.assertFalse(first.training)
+        self.assertTrue(last.training)
+
+        log_probs, _ = model.log_probs(
+            torch.randn(2, 12), torch.tensor([12, 8]))
+        (-log_probs[..., 1].mean()).backward()
+        self.assertIsNone(first.scale.grad)
+        self.assertIsNotNone(last.scale.grad)
+
+        saved_backbone = model.trainable_backbone_state_dict()
+        self.assertEqual(set(saved_backbone), {
+            "encoder.layers.1.scale",
+        })
+        expected = saved_backbone["encoder.layers.1.scale"].clone()
+        with torch.no_grad():
+            last.scale.fill_(9.0)
+        load_ctc_checkpoint_state(model, {
+            "head": model.head_state_dict(),
+            "backbone_trainable": saved_backbone,
+        })
+        torch.testing.assert_close(last.scale, expected)
+
+        with mock.patch.dict(sys.modules, {"transformers": transformers}):
+            with self.assertRaisesRegex(ValueError, "exceeds backbone layers"):
+                FrozenWavLMCTC(
+                    5, "fake/raw", backbone_type="raw", unfreeze_layers=3)
 
     def test_whisper_variable_length_encoder(self):
         class Layer(torch.nn.Module):

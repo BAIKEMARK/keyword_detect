@@ -13,7 +13,9 @@ from ctc_diagnostics import diagnostic_features
 from ctc_text import build_vocabulary, checkpoint_units, warm_vocabulary
 from runtime import select_device
 from train_wavlm_ctc import ctc_valid_mask, make_score_loader
-from wavlm_ctc_model import FrozenWavLMCTC, checkpoint_head_config
+from wavlm_ctc_model import (FrozenWavLMCTC, checkpoint_backbone_type,
+                             checkpoint_head_config, checkpoint_model_config,
+                             load_ctc_checkpoint_state)
 
 
 FEATURES = (
@@ -21,6 +23,21 @@ FEATURES = (
     "edit_similarity", "frame_confidence", "blank_ratio",
     "target_length", "greedy_length",
 )
+
+
+def configure_nltk_data():
+    """Prefer a persistent workspace resource directory over /root/nltk_data."""
+    if os.environ.get("NLTK_DATA"):
+        return os.environ["NLTK_DATA"]
+    candidates = (
+        os.path.join(PATHS.root, "nltk_data"),
+        os.path.join(os.path.dirname(PATHS.root), "nltk_data"),
+    )
+    for path in candidates:
+        if os.path.isdir(path):
+            os.environ["NLTK_DATA"] = path
+            return path
+    return None
 
 
 def parse_args(argv=None):
@@ -83,6 +100,9 @@ def report(rows):
 
 def main(argv=None):
     args = parse_args(argv)
+    nltk_data = configure_nltk_data()
+    if nltk_data:
+        print(f"nltk data: {nltk_data}")
     device = select_device(args.device)
     if args.workers is None:
         args.workers = TRAIN.num_workers if device.type == "cuda" else 0
@@ -104,8 +124,9 @@ def main(argv=None):
     head_config = checkpoint_head_config(checkpoint)
     model = FrozenWavLMCTC(
         len(vocabulary), model_id, checkpoint["dropout"],
-        **head_config).to(device)
-    model.load_head_state_dict(checkpoint["head"])
+        backbone_type=checkpoint_backbone_type(checkpoint),
+        **checkpoint_model_config(checkpoint)).to(device)
+    load_ctc_checkpoint_state(model, checkpoint)
     print(f"device: {device}")
     print(f"model: {model_id} (frozen)")
     print(f"units: {units} head={head_config['head_type']}")

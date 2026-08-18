@@ -15,7 +15,8 @@ from diagnose_registered_ctc import collect_features, make_loader
 from registered_reranker import FEATURES, decision_scores
 from runtime import select_device
 from wavlm_ctc_model import (FrozenWavLMCTC, checkpoint_backbone_type,
-                             checkpoint_head_config)
+                             checkpoint_model_config,
+                             load_ctc_checkpoint_state)
 
 
 def parse_args(argv=None):
@@ -84,9 +85,9 @@ def main(argv=None):
     model = FrozenWavLMCTC(
         len(vocabulary), model_id, checkpoint["dropout"],
         backbone_type=checkpoint_backbone_type(checkpoint),
-        **checkpoint_head_config(checkpoint),
+        **checkpoint_model_config(checkpoint),
     ).to(device)
-    model.load_head_state_dict(checkpoint["head"])
+    load_ctc_checkpoint_state(model, checkpoint)
     model.eval()
     print(f"device: {device}", flush=True)
     print(f"workers: {args.workers}", flush=True)

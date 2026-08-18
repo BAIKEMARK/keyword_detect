@@ -1,17 +1,18 @@
 # 后续提分路线图
 
-更新时间：2026-07-28
+更新时间：2026-08-06
 
 ## 当前结论
 
-当前线上最佳为 `0.90123`：WavLM Large 与 HuBERT Large 的音素 CTC
-Temporal Adapter 秩融合。最佳单模型 HuBERT Large 为 `0.89071`，融合取得
-`+0.01052`，说明两种底模的错误具有明显互补性。
+当前线上最佳为 `0.90796`：HuBERT Large hard-negative、W2V-BERT 2.0 与
+forced-alignment rescorer 的秩融合。加入 forced alignment 前为 `0.90721`，实际只
+提升 `0.00075`，该方向已经达到停止条件，不再继续调 rescorer。
 
-距离约 `0.98` 仍差 `0.07877`。这个量级不能合理地寄希望于更多 epoch、固定
+距离约 `0.98` 仍差 `0.07204`。这个量级不能合理地寄希望于更多 epoch、固定
 seed 重跑或直接扩到全量。当前系统的结构性限制是：训练阶段只学习正确文本的
 CTC 转写概率，推理阶段只看目标文本的绝对 CTC 分数，没有显式学习“这段语音更像
-目标词，还是另一个词”，也没有使用注册音频。
+目标词，还是另一个词”。此外，所有有效 CTC 实验都冻结了底模，只训练约 41 万
+参数的 Temporal Adapter，底模还没有针对本任务适配。
 
 已验证收益：
 
@@ -22,7 +23,29 @@ CTC 转写概率，推理阶段只看目标文本的绝对 CTC 分数，没有�
 | Temporal Adapter | `+0.03005` | 冻结 encoder 后仍需局部时序建模 |
 | WavLM Large 替换 Base+ | `+0.01611` | 更强底模有明确收益 |
 | WavLM Large + HuBERT Large 融合 | `+0.01052` | 跨底模互补仍有价值 |
+| HuBERT hard-negative + W2V-BERT 2.0 | `+0.0060` | 新底模有互补，但仍不是跨越式收益 |
+| forced-alignment rescorer | `+0.00075` | 已到停止条件，不再继续调参 |
 | 全量数据或单纯增加 epoch | 千分位到半百分点 | 不是当前突破口 |
+
+最近关键结果：W2V-BERT 2.0 单模型线上 `0.89638`；HuBERT hard-negative 与
+W2V-BERT 融合 `0.90721`；加入 alignment 后 `0.90796`。Whisper Large-v3 冻结
+底模的最佳 Dev Mean 为 `0.8815`，不续训到 15 epoch。注册音频 align 头 Dev
+约 `0.5083`，当前实现不可用。
+
+## 当前优先实验：顶层部分微调
+
+下一次结构性横测改为 W2V-BERT 2.0 最后一个 Transformer block 部分微调：
+
+- Temporal Adapter 继续使用 `1e-3`；
+- 底模最后一层使用独立小学习率 `1e-5`；
+- 其余底模参数保持冻结和 eval；
+- checkpoint 同时保存 Adapter、最后一层底模和 optimizer，可断点恢复；
+- 先跑 256 条 smoke，确认层定位、梯度、显存和 checkpoint 重载，再跑 100K；
+- 首轮只解冻一层，不同时改数据量、hard-negative 参数或 Adapter 结构。
+
+成功标准：W2V-BERT 单模型 Dev Mean 至少超过原 `0.8937` 达到 `0.9000`，或与
+当前 HuBERT 分支融合至少提升 `0.005`。达不到就停止扩大解冻层数，转向训练集误报
+驱动的在线 hard-negative 和音素竞争词似然比。
 
 ## 新底模判断
 

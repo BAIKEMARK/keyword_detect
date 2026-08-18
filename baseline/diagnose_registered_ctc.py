@@ -18,7 +18,8 @@ from data import normalize_waveform, read_wav, truncate_waveform
 from runtime import select_device, should_pin_memory
 from train_wavlm_ctc import ctc_valid_mask
 from wavlm_ctc_model import (FrozenWavLMCTC, checkpoint_backbone_type,
-                             checkpoint_head_config)
+                             checkpoint_model_config,
+                             load_ctc_checkpoint_state)
 
 
 FEATURES = (
@@ -211,9 +212,9 @@ def main(argv=None):
     model = FrozenWavLMCTC(
         len(vocabulary), model_id, checkpoint["dropout"],
         backbone_type=checkpoint_backbone_type(checkpoint),
-        **checkpoint_head_config(checkpoint),
+        **checkpoint_model_config(checkpoint),
     ).to(device)
-    model.load_head_state_dict(checkpoint["head"])
+    load_ctc_checkpoint_state(model, checkpoint)
     rows = []
     for subset, zip_path, csv_path in (
             ("seen", PATHS.dev_seen_zip, PATHS.dev_seen_csv),

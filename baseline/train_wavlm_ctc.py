@@ -34,6 +34,9 @@ def parse_args(argv=None):
         "--head", choices=("linear", "temporal"), default="linear")
     parser.add_argument("--adapter-dim", type=int, default=256)
     parser.add_argument("--adapter-layers", type=int, default=2)
+    parser.add_argument(
+        "--unfreeze-layers", type=int, default=0,
+        help="unfreeze the last N speech-backbone transformer layers")
     parser.add_argument("--hard-negative-weight", type=float, default=0.0)
     parser.add_argument("--hard-negative-margin", type=float, default=0.5)
     parser.add_argument("--train-zip", default=PATHS.train_zip)
@@ -43,6 +46,9 @@ def parse_args(argv=None):
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--bs", type=int, default=128)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument(
+        "--backbone-lr", type=float, default=1e-5,
+        help="learning rate for optional unfrozen backbone layers")
     parser.add_argument(
         "--subset", type=int, default=None,
         help="number of utterances; omit to use all training audio")
@@ -180,6 +186,7 @@ def training_config(args, max_samples, train_utterances, amp_enabled, device):
         "head_type": args.head,
         "adapter_dim": args.adapter_dim,
         "adapter_layers": args.adapter_layers,
+        "unfreeze_layers": args.unfreeze_layers,
         "hard_negative_weight": args.hard_negative_weight,
         "hard_negative_margin": args.hard_negative_margin,
         "train_csv": args.train_csv,
@@ -189,6 +196,7 @@ def training_config(args, max_samples, train_utterances, amp_enabled, device):
         "dropout": args.dropout,
         "batch_size": args.bs,
         "learning_rate": args.lr,
+        "backbone_learning_rate": args.backbone_lr,
         "noise_prob": args.noise_prob,
         "noise_snr_min": args.noise_snr_min,
         "noise_snr_max": args.noise_snr_max,
@@ -212,7 +220,7 @@ def validate_resume_checkpoint(checkpoint, config, vocabulary):
     path_keys = {"train_csv", "train_zip", "noise_dir"}
     checked_keys = (
         "model_id", "backbone_type", "units", "head_type", "adapter_dim",
-        "adapter_layers",
+        "adapter_layers", "unfreeze_layers", "backbone_learning_rate",
         "hard_negative_weight", "hard_negative_margin",
         "vocabulary", "train_csv", "train_zip",
         "train_utterances", "max_samples", "dropout", "batch_size",
@@ -272,6 +280,7 @@ def checkpoint_state(model, optimizer, scaler, config, vocabulary, device,
     return {
         "format_version": 2,
         "head": model.head_state_dict(),
+        "backbone_trainable": model.trainable_backbone_state_dict(),
         "optimizer": optimizer.state_dict(),
         "scaler": scaler.state_dict(),
         "rng_state": capture_rng_state(device),
@@ -282,6 +291,7 @@ def checkpoint_state(model, optimizer, scaler, config, vocabulary, device,
         "head_type": config["head_type"],
         "adapter_dim": config["adapter_dim"],
         "adapter_layers": config["adapter_layers"],
+        "unfreeze_layers": config["unfreeze_layers"],
         "hard_negative_weight": config["hard_negative_weight"],
         "hard_negative_margin": config["hard_negative_margin"],
         "vocabulary": vocabulary.symbols,
@@ -296,6 +306,7 @@ def checkpoint_state(model, optimizer, scaler, config, vocabulary, device,
         "noise_dir": config["noise_dir"],
         "batch_size": config["batch_size"],
         "learning_rate": config["learning_rate"],
+        "backbone_learning_rate": config["backbone_learning_rate"],
         "auc": mean_auc,
         "seen_auc": seen_auc,
         "unseen_auc": unseen_auc,
@@ -344,6 +355,10 @@ def main():
         raise ValueError("--max-seconds must be positive")
     if args.adapter_dim <= 0 or args.adapter_layers <= 0:
         raise ValueError("--adapter-dim and --adapter-layers must be positive")
+    if args.unfreeze_layers < 0:
+        raise ValueError("--unfreeze-layers must be non-negative")
+    if args.backbone_lr <= 0:
+        raise ValueError("--backbone-lr must be positive")
     if args.hard_negative_weight < 0 or args.hard_negative_margin < 0:
         raise ValueError(
             "--hard-negative-weight and --hard-negative-margin "
@@ -388,7 +403,7 @@ def main():
 
     print(f"device: {device}", flush=True)
     print(f"workers: {args.workers}", flush=True)
-    print(f"model: {args.model_id} (frozen)", flush=True)
+    print(f"model: {args.model_id}", flush=True)
     print(f"backbone: {args.backbone}", flush=True)
     print(f"units: {args.units}", flush=True)
     print(f"head: {args.head}", flush=True)
@@ -405,6 +420,8 @@ def main():
     print(f"epochs: target={args.epochs}", flush=True)
     print(f"batch size: {args.bs}", flush=True)
     print(f"learning rate: {args.lr}", flush=True)
+    print(f"backbone fine-tuning: layers={args.unfreeze_layers} "
+          f"lr={args.backbone_lr}", flush=True)
     print(f"hard negatives: weight={args.hard_negative_weight} "
           f"margin={args.hard_negative_margin} "
           f"anchors={len(hard_negatives or {})}", flush=True)
@@ -465,12 +482,23 @@ def main():
         adapter_dim=args.adapter_dim,
         adapter_layers=args.adapter_layers,
         backbone_type=args.backbone,
+        unfreeze_layers=args.unfreeze_layers,
     ).to(device)
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     frozen = sum(p.numel() for p in model.parameters() if not p.requires_grad)
     print(f"params: trainable={trainable:,} frozen={frozen:,}", flush=True)
 
-    optimizer = torch.optim.AdamW(model.head.parameters(), lr=args.lr)
+    trainable_backbone = [
+        parameter for parameter in model.backbone.parameters()
+        if parameter.requires_grad
+    ]
+    parameter_groups = [{"params": model.head.parameters(), "lr": args.lr}]
+    if trainable_backbone:
+        parameter_groups.append({
+            "params": trainable_backbone,
+            "lr": args.backbone_lr,
+        })
+    optimizer = torch.optim.AdamW(parameter_groups)
     scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
 
     best = -1.0
@@ -478,6 +506,8 @@ def main():
     start_epoch = 1
     if resume_checkpoint is not None:
         model.load_head_state_dict(resume_checkpoint["head"])
+        model.load_trainable_backbone_state_dict(
+            resume_checkpoint.get("backbone_trainable"))
         completed_epoch = int(resume_checkpoint.get("epoch", 0))
         start_epoch = completed_epoch + 1
         best = float(resume_checkpoint.get(
