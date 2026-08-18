@@ -22,6 +22,21 @@ def build_phoneme_hard_negatives(
         candidate_texts: Iterable[str],
         max_candidates: int = 128) -> Mapping[str, str]:
     """Return the nearest distinct training word for each anchor word."""
+    candidates = build_phoneme_hard_negative_candidates(
+        vocabulary, anchor_texts, candidate_texts,
+        neighbors_per_anchor=1, max_candidates=max_candidates)
+    return {anchor: neighbors[0] for anchor, neighbors in candidates.items()}
+
+
+def build_phoneme_hard_negative_candidates(
+        vocabulary: CTCVocabulary,
+        anchor_texts: Iterable[str],
+        candidate_texts: Iterable[str],
+        neighbors_per_anchor: int = 4,
+        max_candidates: int = 128) -> Mapping[str, tuple[str, ...]]:
+    """Return ranked phoneme-neighbor candidates for online hard selection."""
+    if neighbors_per_anchor <= 0:
+        raise ValueError("neighbors_per_anchor must be positive")
     if max_candidates <= 0:
         raise ValueError("max_candidates must be positive")
     candidates = sorted({vocabulary.normalize(text) for text in candidate_texts})
@@ -70,6 +85,12 @@ def build_phoneme_hard_negatives(
                 if candidate != anchor
                 and pronunciations[candidate] != pronunciation
             }
+        elif len(pool) < neighbors_per_anchor:
+            pool.update(
+                candidate for candidate in candidates
+                if candidate != anchor
+                and pronunciations[candidate] != pronunciation
+            )
         if not pool:
             raise ValueError(
                 f"no distinguishable phoneme hard negative for {anchor!r}")
@@ -97,5 +118,6 @@ def build_phoneme_hard_negatives(
                 candidate,
             )
 
-        neighbors[anchor] = min(pool, key=rank)
+        neighbors[anchor] = tuple(
+            sorted(pool, key=rank)[:neighbors_per_anchor])
     return neighbors
