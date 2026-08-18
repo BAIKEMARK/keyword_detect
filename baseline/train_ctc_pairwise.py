@@ -43,6 +43,9 @@ def parse_args(argv=None):
     parser.add_argument("--ctc-weight", type=float, default=0.25)
     parser.add_argument("--pair-weight", type=float, default=1.0)
     parser.add_argument("--pair-margin", type=float, default=0.1)
+    parser.add_argument(
+        "--positive-weight", type=float, default=None,
+        help="official positive-pair weight; defaults to negative/positive count")
     parser.add_argument("--hard-negative-weight", type=float, default=0.25)
     parser.add_argument("--hard-negative-margin", type=float, default=0.1)
     parser.add_argument("--hard-negative-k", type=int, default=4)
@@ -86,6 +89,7 @@ def pairwise_discriminative_objective(
         hard_targets, hard_target_lengths, hard_negative_count,
         labels, blank_id,
         ctc_weight=0.25, pair_weight=1.0, pair_margin=0.1,
+        positive_weight=1.0,
         hard_negative_weight=0.25, hard_negative_margin=0.1):
     batch_size = len(output_lengths)
     if hard_negative_count <= 0:
@@ -124,8 +128,14 @@ def pairwise_discriminative_objective(
     positive_gap = enroll_scores - hardest_scores
     negative_gap = query_scores - enroll_scores
     official_gap = labels * positive_gap + (1.0 - labels) * negative_gap
-    pair_loss = F.softplus(
-        pair_margin - official_gap[pair_valid]).mean()
+    pair_terms = F.softplus(pair_margin - official_gap[pair_valid])
+    pair_labels = labels[pair_valid]
+    pair_weights = torch.where(
+        pair_labels > 0.5,
+        pair_terms.new_tensor(positive_weight),
+        pair_terms.new_tensor(1.0),
+    )
+    pair_loss = (pair_terms * pair_weights).sum() / pair_weights.sum()
 
     hard_valid_rows = query_valid & has_hard_negative
     hard_loss = F.softplus(
@@ -192,6 +202,7 @@ def _checkpoint_state(base, model, optimizer, scaler, args, device,
         "pairwise_ctc_weight": args.ctc_weight,
         "pairwise_pair_weight": args.pair_weight,
         "pairwise_pair_margin": args.pair_margin,
+        "pairwise_positive_weight": args.positive_weight,
         "pairwise_hard_negative_weight": args.hard_negative_weight,
         "pairwise_hard_negative_margin": args.hard_negative_margin,
         "pairwise_hard_negative_k": args.hard_negative_k,
@@ -241,6 +252,8 @@ def main(argv=None):
         raise ValueError("learning rate and hard-negative count must be positive")
     if args.pair_margin < 0 or args.hard_negative_margin < 0:
         raise ValueError("pair and hard-negative margins must be non-negative")
+    if args.positive_weight is not None and args.positive_weight <= 0:
+        raise ValueError("--positive-weight must be positive when provided")
     if args.ctc_weight + args.pair_weight + args.hard_negative_weight <= 0:
         raise ValueError("at least one loss weight must be positive")
     for description, path in (
@@ -358,6 +371,11 @@ def main(argv=None):
         args.workers, device, vocabulary)
 
     positives = sum(pair["label"] for pair in train_pairs)
+    negatives = len(train_pairs) - positives
+    if positives == 0 or negatives == 0:
+        raise ValueError("training pairs must contain both official labels")
+    if args.positive_weight is None:
+        args.positive_weight = negatives / positives
     trainable = sum(
         parameter.numel() for parameter in model.parameters()
         if parameter.requires_grad)
@@ -366,12 +384,13 @@ def main(argv=None):
     print(f"backbone: {model.backbone_type}", flush=True)
     print(f"initial checkpoint: {source_path}", flush=True)
     print(f"train pairs: {len(train_pairs)} / {len(all_pairs)} "
-          f"positive={positives} negative={len(train_pairs) - positives}",
+          f"positive={positives} negative={negatives}",
           flush=True)
     print(f"batch size: {args.bs} epochs: target={args.epochs}", flush=True)
     print(f"loss: ctc={args.ctc_weight} pair={args.pair_weight} "
           f"hard={args.hard_negative_weight} K={args.hard_negative_k}",
           flush=True)
+    print(f"official positive weight: {args.positive_weight:.4f}", flush=True)
     print(f"learning rate: head={args.lr} backbone={args.backbone_lr}",
           flush=True)
     print(f"trainable parameters: {trainable:,}", flush=True)
@@ -384,6 +403,7 @@ def main(argv=None):
         ctc_weight=args.ctc_weight,
         pair_weight=args.pair_weight,
         pair_margin=args.pair_margin,
+        positive_weight=args.positive_weight,
         hard_negative_weight=args.hard_negative_weight,
         hard_negative_margin=args.hard_negative_margin,
     )
